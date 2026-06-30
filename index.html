@@ -6,25 +6,30 @@
   <title>How llm-d's Prefix-Cache-Aware Routing Works</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Red+Hat+Display:wght@400;500;600;700;800;900&family=Red+Hat+Text:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Lora:ital,wght@0,400;0,500;0,600;0,700;1,400;1,500&display=swap" rel="stylesheet">
   <style>
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
 :root {
-  --color-bg: #f7f8fc;
-  --color-surface: #ffffff;
-  --color-border: #e2e8f0;
-  --color-border-light: #edf2f7;
-  --color-text: #1a202c;
-  --color-text-secondary: #4a5568;
-  --color-text-muted: #718096;
-  --color-link: #2b6cb0;
-  --color-hit: #276749;
-  --color-hit-bright: #38a169;
-  --color-miss: #e53e3e;
-  --color-route: #2b6cb0;
-  --color-epp: #6b46c1;
-  --color-accent: #2b6cb0;
+  --color-bg: #faf9f7;
+  --color-surface: #fffefa;
+  --color-surface-warm: #fdf8f3;
+  --color-border: #e8e2da;
+  --color-border-light: #f0ebe4;
+  --color-text: #2d2a26;
+  --color-text-secondary: #5c5750;
+  --color-text-muted: #8a8279;
+  --color-link: #6b5b3e;
+  --color-hit: #3d7a4a;
+  --color-hit-bright: #5ea86d;
+  --color-miss: #c45a4a;
+  --color-miss-soft: #e8a090;
+  --color-route: #5a7fb5;
+  --color-epp: #7b5ea7;
+  --color-epp-warm: #9474c2;
+  --color-accent: #c49a6c;
+  --color-accent-light: #e8d5bc;
+  --color-chapter: #6b5b3e;
   --space-xs: 0.25rem;
   --space-sm: 0.5rem;
   --space-md: 1rem;
@@ -32,8 +37,9 @@
   --space-xl: 2rem;
   --space-2xl: 3rem;
   --space-3xl: 4rem;
-  --font-sans: 'Red Hat Display', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-  --font-body: 'Red Hat Text', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --space-4xl: 6rem;
+  --font-serif: 'Lora', Georgia, 'Times New Roman', serif;
+  --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
   --font-mono: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
   --font-size-sm: 0.875rem;
   --font-size-base: 1rem;
@@ -41,7 +47,7 @@
   --font-size-xl: 1.25rem;
   --font-size-2xl: 1.5rem;
   --font-size-3xl: 2rem;
-  --font-size-hero: 4.5rem;
+  --font-size-hero: 3.5rem;
   --radius-sm: 6px;
   --radius-md: 10px;
   --radius-lg: 16px;
@@ -53,7 +59,7 @@
 html { scroll-behavior: smooth; }
 
 body {
-  font-family: var(--font-body);
+  font-family: var(--font-sans);
   font-size: var(--font-size-base);
   line-height: 1.7;
   color: var(--color-text);
@@ -63,27 +69,77 @@ body {
 }
 
 a { color: var(--color-link); text-decoration: none; transition: color var(--transition-fast); }
-a:hover { text-decoration: underline; }
-code { font-family: var(--font-mono); font-size: 0.88em; background: #edf2f7; padding: 0.15em 0.4em; border-radius: var(--radius-sm); }
-img { max-width: 100%; height: auto; }
+a:hover { text-decoration: underline; color: var(--color-epp); }
+code { font-family: var(--font-mono); font-size: 0.88em; background: #f0ebe4; padding: 0.15em 0.4em; border-radius: var(--radius-sm); }
 
-.container { max-width: 1200px; margin: 0 auto; padding: 0 var(--space-xl); }
-section { padding: var(--space-3xl) 0; position: relative; }
+.container { max-width: 1100px; margin: 0 auto; padding: 0 var(--space-xl); }
 
-h2 {
-  font-family: var(--font-sans); font-size: var(--font-size-3xl); font-weight: 800;
-  margin-bottom: var(--space-md); letter-spacing: -0.03em;
+/* --- Floating gradient blobs --- */
+.blob-canvas {
+  position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+  pointer-events: none; z-index: 0; overflow: hidden;
 }
-h3 { font-family: var(--font-sans); font-size: var(--font-size-xl); font-weight: 700; margin-bottom: var(--space-sm); }
-
-.section-description {
-  color: var(--color-text-secondary); font-size: var(--font-size-lg);
-  margin-bottom: var(--space-xl); max-width: 720px;
+.blob {
+  position: absolute; border-radius: 50%; filter: blur(100px); opacity: 0.25;
+  will-change: transform;
+}
+.blob--peach {
+  width: 500px; height: 500px;
+  background: radial-gradient(circle, rgba(212, 163, 115, 0.5) 0%, transparent 70%);
+  top: -100px; right: -100px;
+  animation: blobDrift1 20s ease-in-out infinite;
+}
+.blob--lavender {
+  width: 450px; height: 450px;
+  background: radial-gradient(circle, rgba(150, 120, 200, 0.35) 0%, transparent 70%);
+  top: 40%; left: -120px;
+  animation: blobDrift2 25s ease-in-out infinite;
+}
+.blob--sage {
+  width: 400px; height: 400px;
+  background: radial-gradient(circle, rgba(120, 180, 130, 0.3) 0%, transparent 70%);
+  bottom: 10%; right: -80px;
+  animation: blobDrift3 22s ease-in-out infinite;
+}
+.blob--gold {
+  width: 350px; height: 350px;
+  background: radial-gradient(circle, rgba(210, 180, 120, 0.3) 0%, transparent 70%);
+  top: 60%; left: 40%;
+  animation: blobDrift4 28s ease-in-out infinite;
 }
 
-/* --- Entrance animations (pure CSS, no JS dependency) --- */
+@keyframes blobDrift1 {
+  0%, 100% { transform: translate(0, 0) scale(1); }
+  25% { transform: translate(-40px, 50px) scale(1.08); }
+  50% { transform: translate(30px, -20px) scale(0.95); }
+  75% { transform: translate(-20px, 30px) scale(1.05); }
+}
+@keyframes blobDrift2 {
+  0%, 100% { transform: translate(0, 0) scale(1); }
+  33% { transform: translate(60px, -30px) scale(1.1); }
+  66% { transform: translate(-30px, 40px) scale(0.92); }
+}
+@keyframes blobDrift3 {
+  0%, 100% { transform: translate(0, 0) scale(1); }
+  30% { transform: translate(-50px, -40px) scale(1.06); }
+  60% { transform: translate(40px, 20px) scale(0.97); }
+}
+@keyframes blobDrift4 {
+  0%, 100% { transform: translate(0, 0) scale(1); }
+  40% { transform: translate(30px, -50px) scale(1.04); }
+  70% { transform: translate(-40px, 30px) scale(0.96); }
+}
+
+/* --- Scroll Progress --- */
+.scroll-progress {
+  position: fixed; top: 0; left: 0; height: 3px;
+  background: linear-gradient(90deg, var(--color-accent), var(--color-epp-warm), var(--color-hit-bright));
+  z-index: 200; transition: width 50ms linear; border-radius: 0 2px 2px 0;
+}
+
+/* --- Entrance animations --- */
 @keyframes fadeInUp {
-  from { opacity: 0; transform: translateY(24px); }
+  from { opacity: 0; transform: translateY(28px); }
   to { opacity: 1; transform: translateY(0); }
 }
 .reveal { animation: fadeInUp 0.7s cubic-bezier(0.4, 0, 0.2, 1) both; }
@@ -91,6 +147,19 @@ h3 { font-family: var(--font-sans); font-size: var(--font-size-xl); font-weight:
 .reveal-delay-2 { animation-delay: 0.2s; }
 .reveal-delay-3 { animation-delay: 0.3s; }
 .reveal-delay-4 { animation-delay: 0.4s; }
+
+/* --- Header --- */
+.site-header {
+  position: sticky; top: 0; z-index: 100;
+  background: rgba(250, 249, 247, 0.88);
+  backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px);
+  border-bottom: 1px solid var(--color-border-light);
+  padding: var(--space-md) 0;
+}
+.header-content { display: flex; align-items: center; justify-content: space-between; gap: var(--space-lg); }
+.header-text h1 { font-family: var(--font-serif); font-size: var(--font-size-xl); font-weight: 600; letter-spacing: -0.01em; color: var(--color-text); }
+.header-text .subtitle { font-size: var(--font-size-sm); color: var(--color-text-muted); margin-top: 2px; font-family: var(--font-sans); }
+.header-links { display: flex; gap: var(--space-sm); }
 
 /* --- Buttons --- */
 .btn {
@@ -102,97 +171,115 @@ h3 { font-family: var(--font-sans); font-size: var(--font-size-xl); font-weight:
 }
 .btn:hover { text-decoration: none; transform: translateY(-1px); }
 .btn-primary {
-  background: #ee0000; color: #fff; border-color: #ee0000;
-  box-shadow: 0 2px 8px rgba(238, 0, 0, 0.2);
+  background: var(--color-epp); color: #fff; border-color: var(--color-epp);
+  box-shadow: 0 2px 8px rgba(123, 94, 167, 0.25);
 }
-.btn-primary:hover { background: #cc0000; border-color: #cc0000; box-shadow: 0 4px 16px rgba(238, 0, 0, 0.3); }
+.btn-primary:hover { background: var(--color-epp-warm); border-color: var(--color-epp-warm); box-shadow: 0 4px 16px rgba(123, 94, 167, 0.35); }
 .btn-outline {
   background: var(--color-surface); color: var(--color-text); border-color: var(--color-border);
   box-shadow: 0 1px 3px rgba(0,0,0,0.04);
 }
 .btn-outline:hover { border-color: var(--color-text-muted); box-shadow: 0 4px 12px rgba(0,0,0,0.08); }
 
-/* --- Header --- */
-.site-header {
-  position: sticky; top: 0; z-index: 100;
-  background: rgba(255, 255, 255, 0.85);
-  backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px);
-  border-bottom: 1px solid var(--color-border-light);
-  padding: var(--space-md) 0;
+/* --- Chapter markers --- */
+.chapter {
+  padding: var(--space-4xl) 0 var(--space-3xl);
+  position: relative;
+  z-index: 1;
 }
-.header-content { display: flex; align-items: center; justify-content: space-between; gap: var(--space-lg); }
-.header-text h1 { font-family: var(--font-sans); font-size: var(--font-size-xl); font-weight: 800; letter-spacing: -0.02em; }
-.header-text .subtitle { font-size: var(--font-size-sm); color: var(--color-text-muted); margin-top: 2px; }
-.header-links { display: flex; gap: var(--space-sm); }
-
-/* --- Dot grid background --- */
-.dot-grid {
-  position: fixed; top: 0; left: 0; width: 100%; height: 100%;
-  pointer-events: none; z-index: 0;
-  background-image: radial-gradient(circle, rgba(107, 70, 193, 0.08) 1px, transparent 1px);
-  background-size: 32px 32px;
-  mask-image: linear-gradient(180deg, rgba(0,0,0,0.3) 0%, rgba(0,0,0,0.05) 50%, rgba(0,0,0,0.3) 100%);
-  -webkit-mask-image: linear-gradient(180deg, rgba(0,0,0,0.3) 0%, rgba(0,0,0,0.05) 50%, rgba(0,0,0,0.3) 100%);
+.chapter-marker {
+  text-align: center;
+  margin-bottom: var(--space-3xl);
+}
+.chapter-number {
+  font-family: var(--font-serif);
+  font-size: var(--font-size-sm);
+  font-weight: 400;
+  font-style: italic;
+  color: var(--color-accent);
+  text-transform: uppercase;
+  letter-spacing: 0.15em;
+  margin-bottom: var(--space-sm);
+}
+.chapter-title {
+  font-family: var(--font-serif);
+  font-size: var(--font-size-3xl);
+  font-weight: 700;
+  color: var(--color-text);
+  letter-spacing: -0.02em;
+  line-height: 1.3;
+}
+.chapter-title::after {
+  content: '';
+  display: block;
+  width: 60px;
+  height: 2px;
+  background: linear-gradient(90deg, var(--color-accent), var(--color-accent-light));
+  margin: var(--space-lg) auto 0;
+  border-radius: 2px;
+}
+.chapter-intro {
+  max-width: 720px;
+  margin: 0 auto;
+  text-align: center;
+  font-family: var(--font-serif);
+  font-size: var(--font-size-lg);
+  font-style: italic;
+  color: var(--color-text-secondary);
+  line-height: 1.9;
 }
 
-/* --- Hero --- */
+/* --- Chapter divider --- */
+.chapter-divider {
+  text-align: center;
+  padding: var(--space-2xl) 0;
+  position: relative;
+  z-index: 1;
+}
+.chapter-divider::before {
+  content: '';
+  display: block;
+  width: 120px;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, var(--color-border), var(--color-accent), var(--color-border), transparent);
+  margin: 0 auto;
+}
+
+/* --- Hero / Opening --- */
 .hero {
-  padding: 5rem 0 4rem; text-align: center;
-  background: linear-gradient(180deg, #ffffff 0%, var(--color-bg) 100%);
-  border-top: none; position: relative; overflow: hidden;
+  padding: 5rem 0 3rem;
+  text-align: center;
+  position: relative;
+  z-index: 1;
+  overflow: hidden;
 }
-.hero::before, .hero::after {
-  content: ''; position: absolute; border-radius: 50%;
-  filter: blur(80px); opacity: 0.4;
-  animation: floatOrb 12s ease-in-out infinite; pointer-events: none;
-}
-.hero::before {
-  width: 400px; height: 400px;
-  background: radial-gradient(circle, rgba(107, 70, 193, 0.25) 0%, transparent 70%);
-  top: -100px; right: -80px;
-}
-.hero::after {
-  width: 350px; height: 350px;
-  background: radial-gradient(circle, rgba(49, 130, 206, 0.2) 0%, transparent 70%);
-  bottom: -60px; left: -60px; animation-delay: -6s;
-}
-.hero-orb-accent {
-  position: absolute; width: 300px; height: 300px; border-radius: 50%;
-  filter: blur(70px); opacity: 0.3;
-  background: radial-gradient(circle, rgba(56, 161, 105, 0.15) 0%, transparent 70%);
-  top: 50%; left: 50%; transform: translate(-50%, -50%);
-  animation: floatOrb 15s ease-in-out infinite reverse; pointer-events: none;
-}
-
-@keyframes floatOrb {
-  0%, 100% { transform: translate(0, 0) scale(1); }
-  25% { transform: translate(20px, -30px) scale(1.05); }
-  50% { transform: translate(-15px, 15px) scale(0.95); }
-  75% { transform: translate(25px, 20px) scale(1.03); }
-}
-
 .hero-headline {
   display: flex; flex-direction: column; align-items: center; gap: var(--space-sm);
-  margin-bottom: var(--space-xl); position: relative; z-index: 1;
+  margin-bottom: var(--space-xl);
 }
 .hero-number {
-  font-family: var(--font-sans); font-size: var(--font-size-hero); font-weight: 900;
-  letter-spacing: -0.04em;
-  background: linear-gradient(135deg, #6b46c1 0%, #2b6cb0 50%, #276749 100%);
+  font-family: var(--font-serif); font-size: var(--font-size-hero); font-weight: 700;
+  letter-spacing: -0.03em;
+  background: linear-gradient(135deg, var(--color-epp) 0%, var(--color-accent) 50%, var(--color-hit) 100%);
   background-size: 200% 200%;
   -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text;
-  line-height: 1.1;
-  animation: gradientShift 4s ease-in-out infinite;
+  line-height: 1.15;
+  animation: gradientShift 6s ease-in-out infinite;
 }
 @keyframes gradientShift {
   0%, 100% { background-position: 0% 50%; }
   50% { background-position: 100% 50%; }
 }
-.hero-label { font-family: var(--font-sans); font-size: var(--font-size-2xl); font-weight: 600; }
+.hero-label {
+  font-family: var(--font-serif); font-size: var(--font-size-xl); font-weight: 500;
+  color: var(--color-text-secondary);
+  font-style: italic;
+}
 .hero-description {
+  font-family: var(--font-serif);
   font-size: var(--font-size-lg); color: var(--color-text-secondary);
-  max-width: 680px; margin: 0 auto var(--space-2xl); line-height: 1.8;
-  position: relative; z-index: 1;
+  max-width: 680px; margin: 0 auto var(--space-2xl); line-height: 1.9;
+  font-style: italic;
 }
 
 /* --- Stat Cards --- */
@@ -206,21 +293,21 @@ h3 { font-family: var(--font-sans); font-size: var(--font-size-xl); font-weight:
   border-radius: var(--radius-lg); padding: var(--space-lg) var(--space-md);
   text-align: center; transition: all var(--transition-base);
   position: relative; overflow: hidden;
-  box-shadow: 0 1px 3px rgba(0,0,0,0.04);
+  box-shadow: 0 2px 12px rgba(139, 118, 90, 0.06);
 }
 .stat-card::before {
   content: ''; position: absolute; top: 0; left: 0; right: 0; height: 3px;
-  background: linear-gradient(90deg, var(--color-epp), var(--color-accent));
+  background: linear-gradient(90deg, var(--color-accent), var(--color-epp-warm));
   opacity: 0; transition: opacity var(--transition-base);
 }
 .stat-card:hover {
-  border-color: var(--color-epp);
-  box-shadow: 0 8px 30px rgba(107, 70, 193, 0.12);
+  border-color: var(--color-accent);
+  box-shadow: 0 8px 30px rgba(196, 154, 108, 0.15);
   transform: translateY(-4px);
 }
 .stat-card:hover::before { opacity: 1; }
 .stat-value {
-  font-family: var(--font-sans); font-size: var(--font-size-2xl); font-weight: 800;
+  font-family: var(--font-serif); font-size: var(--font-size-2xl); font-weight: 700;
   color: var(--color-epp); margin-bottom: var(--space-xs);
 }
 .stat-label {
@@ -229,14 +316,7 @@ h3 { font-family: var(--font-sans); font-size: var(--font-size-xl); font-weight:
 }
 .stat-detail { font-size: 0.8rem; color: var(--color-text-muted); }
 
-/* --- Section divider --- */
-.section-divider {
-  height: 1px; border: none; margin: 0;
-  background: linear-gradient(90deg, transparent 0%, var(--color-border) 20%, var(--color-epp) 50%, var(--color-border) 80%, transparent 100%);
-  opacity: 0.4;
-}
-
-/* --- Problem Section --- */
+/* --- Problem cards --- */
 .problem-grid {
   display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-xl);
   margin-top: var(--space-xl);
@@ -245,43 +325,34 @@ h3 { font-family: var(--font-sans); font-size: var(--font-size-xl); font-weight:
   background: var(--color-surface); border: 1px solid var(--color-border);
   border-radius: var(--radius-lg); padding: var(--space-xl);
   transition: all var(--transition-base);
-  box-shadow: 0 1px 3px rgba(0,0,0,0.04);
+  box-shadow: 0 2px 12px rgba(139, 118, 90, 0.06);
   position: relative; overflow: hidden;
 }
-.problem-card::after {
-  content: ''; position: absolute; top: 0; left: 0; right: 0; bottom: 0;
-  border-radius: var(--radius-lg); opacity: 0; transition: opacity 0.4s ease;
-  pointer-events: none;
-}
 .problem-card:hover { box-shadow: 0 8px 30px rgba(0,0,0,0.08); transform: translateY(-3px); }
-.problem-card--bad { border-left: 4px solid var(--color-miss); }
-.problem-card--bad::after { background: linear-gradient(135deg, rgba(229, 62, 62, 0.03) 0%, transparent 60%); }
-.problem-card--bad:hover::after { opacity: 1; }
+.problem-card--bad { border-left: 4px solid var(--color-miss-soft); }
 .problem-card--good { border-left: 4px solid var(--color-hit-bright); }
-.problem-card--good::after { background: linear-gradient(135deg, rgba(56, 161, 105, 0.03) 0%, transparent 60%); }
-.problem-card--good:hover::after { opacity: 1; }
-.problem-card h3 { font-size: var(--font-size-lg); margin-bottom: var(--space-md); }
-.problem-card--bad h3::before { content: ''; display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--color-miss); margin-right: 8px; vertical-align: middle; }
+.problem-card h3 { font-family: var(--font-serif); font-size: var(--font-size-lg); margin-bottom: var(--space-md); font-weight: 600; }
+.problem-card--bad h3::before { content: ''; display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--color-miss-soft); margin-right: 8px; vertical-align: middle; }
 .problem-card--good h3::before { content: ''; display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--color-hit-bright); margin-right: 8px; vertical-align: middle; }
 .problem-card p { font-size: var(--font-size-sm); color: var(--color-text-secondary); line-height: 1.7; }
 
 /* --- Animated Diagram --- */
 .diagram-section {
-  background: linear-gradient(180deg, var(--color-bg) 0%, #eef0f8 50%, var(--color-bg) 100%);
+  position: relative; z-index: 1;
 }
 .diagram-wrapper {
   background: var(--color-surface);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-xl); padding: var(--space-2xl);
-  box-shadow: 0 4px 24px rgba(107, 70, 193, 0.06), 0 1px 3px rgba(0,0,0,0.04);
+  box-shadow: 0 4px 30px rgba(139, 118, 90, 0.08);
   position: relative; overflow: hidden;
 }
 .diagram-wrapper::before {
   content: ''; position: absolute; top: -1px; left: -1px; right: -1px; bottom: -1px;
   border-radius: var(--radius-xl);
-  background: linear-gradient(135deg, rgba(107,70,193,0.15), rgba(49,130,206,0.1), rgba(56,161,105,0.1), rgba(107,70,193,0.15));
+  background: linear-gradient(135deg, rgba(196,154,108,0.2), rgba(123,94,167,0.15), rgba(94,168,109,0.1), rgba(196,154,108,0.2));
   background-size: 300% 300%;
-  animation: borderGlow 6s ease-in-out infinite;
+  animation: borderGlow 8s ease-in-out infinite;
   z-index: -1;
   mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
   -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
@@ -316,7 +387,7 @@ h3 { font-family: var(--font-sans); font-size: var(--font-size-xl); font-weight:
 
 .scenario-tabs {
   display: flex; gap: 4px; margin-bottom: var(--space-xl);
-  background: #edf2f7; border-radius: var(--radius-md); padding: 4px;
+  background: var(--color-border-light); border-radius: var(--radius-md); padding: 4px;
   justify-content: center;
 }
 .scenario-tab {
@@ -328,7 +399,7 @@ h3 { font-family: var(--font-sans); font-size: var(--font-size-xl); font-weight:
 .scenario-tab:hover { color: var(--color-text); background: rgba(255,255,255,0.5); }
 .scenario-tab.active {
   color: var(--color-text); background: var(--color-surface);
-  box-shadow: 0 1px 4px rgba(0,0,0,0.1);
+  box-shadow: 0 1px 4px rgba(0,0,0,0.08);
 }
 
 .diagram-canvas { position: relative; width: 100%; height: 420px; margin-bottom: var(--space-lg); }
@@ -337,9 +408,40 @@ h3 { font-family: var(--font-sans); font-size: var(--font-size-xl); font-weight:
   text-align: center; font-size: var(--font-size-base); color: var(--color-text-secondary);
   min-height: 3em; line-height: 1.6;
   padding: var(--space-md) var(--space-xl);
-  background: linear-gradient(135deg, rgba(107, 70, 193, 0.04), rgba(49, 130, 206, 0.03));
-  border-radius: var(--radius-md); border: 1px solid rgba(107, 70, 193, 0.08);
+  background: linear-gradient(135deg, rgba(196, 154, 108, 0.06), rgba(123, 94, 167, 0.04));
+  border-radius: var(--radius-md); border: 1px solid rgba(196, 154, 108, 0.12);
   transition: opacity 0.3s ease;
+}
+
+/* The big start button */
+.start-button-wrapper {
+  position: absolute; top: 0; left: 0; right: 0; bottom: 0;
+  display: flex; align-items: center; justify-content: center;
+  z-index: 15; background: rgba(250, 249, 247, 0.6);
+  backdrop-filter: blur(2px); -webkit-backdrop-filter: blur(2px);
+  border-radius: var(--radius-lg);
+  transition: opacity 0.4s ease, visibility 0.4s ease;
+}
+.start-button-wrapper.hidden {
+  opacity: 0; visibility: hidden; pointer-events: none;
+}
+.start-button {
+  font-family: var(--font-serif); font-size: var(--font-size-xl); font-weight: 600;
+  padding: 1rem 2.5rem; border-radius: var(--radius-xl);
+  border: none; cursor: pointer; color: #fff;
+  background: linear-gradient(135deg, var(--color-epp), var(--color-epp-warm), var(--color-accent));
+  background-size: 200% 200%;
+  box-shadow: 0 4px 24px rgba(123, 94, 167, 0.3), 0 2px 8px rgba(196, 154, 108, 0.2);
+  transition: all 0.4s ease;
+  animation: startBtnPulse 3s ease-in-out infinite, gradientShift 6s ease-in-out infinite;
+}
+.start-button:hover {
+  transform: translateY(-3px) scale(1.03);
+  box-shadow: 0 8px 32px rgba(123, 94, 167, 0.4), 0 4px 12px rgba(196, 154, 108, 0.25);
+}
+@keyframes startBtnPulse {
+  0%, 100% { box-shadow: 0 4px 24px rgba(123, 94, 167, 0.3), 0 2px 8px rgba(196, 154, 108, 0.2); }
+  50% { box-shadow: 0 6px 28px rgba(123, 94, 167, 0.45), 0 3px 12px rgba(196, 154, 108, 0.3); }
 }
 
 /* Pod nodes */
@@ -348,13 +450,13 @@ h3 { font-family: var(--font-sans); font-size: var(--font-size-xl); font-weight:
   background: var(--color-surface); border: 2px solid var(--color-border);
   border-radius: var(--radius-lg); padding: var(--space-md);
   transition: all 0.5s ease;
-  box-shadow: 0 2px 8px rgba(0,0,0,0.04);
+  box-shadow: 0 2px 12px rgba(139, 118, 90, 0.08);
 }
 .pod.highlighted {
   border-color: var(--color-hit-bright);
-  box-shadow: 0 0 24px rgba(56, 161, 105, 0.2), 0 4px 12px rgba(56, 161, 105, 0.1);
+  box-shadow: 0 0 24px rgba(94, 168, 109, 0.2), 0 4px 12px rgba(94, 168, 109, 0.1);
 }
-.pod.miss { border-color: var(--color-miss); box-shadow: 0 0 20px rgba(229, 62, 62, 0.15); }
+.pod.miss { border-color: var(--color-miss-soft); box-shadow: 0 0 20px rgba(196, 90, 74, 0.12); }
 .pod-header {
   display: flex; align-items: center; justify-content: space-between;
   margin-bottom: var(--space-sm);
@@ -362,8 +464,8 @@ h3 { font-family: var(--font-sans); font-size: var(--font-size-xl); font-weight:
 }
 .pod-status { width: 8px; height: 8px; border-radius: 50%; background: var(--color-hit-bright); animation: podPulse 2s ease-in-out infinite; }
 @keyframes podPulse {
-  0%, 100% { box-shadow: 0 0 0 0 rgba(56, 161, 105, 0.4); }
-  50% { box-shadow: 0 0 0 4px rgba(56, 161, 105, 0); }
+  0%, 100% { box-shadow: 0 0 0 0 rgba(94, 168, 109, 0.4); }
+  50% { box-shadow: 0 0 0 4px rgba(94, 168, 109, 0); }
 }
 
 .cache-blocks { display: flex; flex-wrap: wrap; gap: 3px; min-height: 40px; }
@@ -373,7 +475,7 @@ h3 { font-family: var(--font-sans); font-size: var(--font-size-xl); font-weight:
   display: flex; align-items: center; justify-content: center;
   transition: all 0.4s ease; color: #fff;
 }
-.cache-block--empty { background: #edf2f7; color: #a0aec0; }
+.cache-block--empty { background: var(--color-border-light); color: var(--color-text-muted); }
 .cache-block--filled { background: var(--color-hit-bright); }
 .cache-block--match { background: var(--color-epp); animation: blockPulse 0.6s ease; }
 .cache-block--new { background: var(--color-route); animation: blockAppear 0.4s ease; }
@@ -384,17 +486,17 @@ h3 { font-family: var(--font-sans); font-size: var(--font-size-xl); font-weight:
 /* EPP Router node */
 .epp-node {
   position: absolute;
-  background: linear-gradient(135deg, var(--color-epp), #805ad5);
+  background: linear-gradient(135deg, var(--color-epp), var(--color-epp-warm));
   color: #fff; border-radius: var(--radius-lg);
   padding: var(--space-md) var(--space-lg); text-align: center;
   font-family: var(--font-sans); font-weight: 700;
-  box-shadow: 0 4px 20px rgba(107, 70, 193, 0.3);
+  box-shadow: 0 4px 20px rgba(123, 94, 167, 0.3);
   transition: all 0.5s ease; z-index: 5;
   animation: eppBreathe 3s ease-in-out infinite;
 }
 @keyframes eppBreathe {
-  0%, 100% { box-shadow: 0 4px 20px rgba(107, 70, 193, 0.3); }
-  50% { box-shadow: 0 4px 28px rgba(107, 70, 193, 0.45); }
+  0%, 100% { box-shadow: 0 4px 20px rgba(123, 94, 167, 0.3); }
+  50% { box-shadow: 0 4px 28px rgba(123, 94, 167, 0.45); }
 }
 .epp-node .epp-label { font-size: var(--font-size-sm); opacity: 0.8; margin-bottom: 2px; }
 .epp-node .epp-title { font-size: var(--font-size-base); }
@@ -406,7 +508,7 @@ h3 { font-family: var(--font-sans); font-size: var(--font-size-xl); font-weight:
   padding: 4px 12px; border-radius: var(--radius-md);
   font-family: var(--font-sans); font-size: 0.7rem; font-weight: 700;
   white-space: nowrap; opacity: 0; z-index: 10;
-  box-shadow: 0 2px 10px rgba(49, 130, 206, 0.35);
+  box-shadow: 0 2px 10px rgba(90, 127, 181, 0.35);
   transition: all 0.6s cubic-bezier(0.4, 0, 0.2, 1);
 }
 .request-packet.visible { opacity: 1; }
@@ -419,9 +521,9 @@ h3 { font-family: var(--font-sans); font-size: var(--font-size-xl); font-weight:
   opacity: 0; transition: all 0.3s ease; z-index: 6;
 }
 .score-badge.visible { opacity: 1; transform: scale(1); }
-.score-badge--high { background: #c6f6d5; color: var(--color-hit); box-shadow: 0 2px 8px rgba(56, 161, 105, 0.2); }
-.score-badge--low { background: #fed7d7; color: var(--color-miss); }
-.score-badge--zero { background: #edf2f7; color: var(--color-text-muted); }
+.score-badge--high { background: #d4edda; color: var(--color-hit); box-shadow: 0 2px 8px rgba(94, 168, 109, 0.2); }
+.score-badge--low { background: #f8d7da; color: var(--color-miss); }
+.score-badge--zero { background: var(--color-border-light); color: var(--color-text-muted); }
 
 /* Connection lines (SVG) */
 .diagram-lines {
@@ -431,19 +533,30 @@ h3 { font-family: var(--font-sans); font-size: var(--font-size-xl); font-weight:
 .diagram-lines line { stroke: var(--color-border); stroke-width: 2; stroke-dasharray: 6 4; }
 .diagram-lines line.active {
   stroke: var(--color-epp); stroke-width: 3; stroke-dasharray: none;
-  filter: drop-shadow(0 0 6px rgba(107, 70, 193, 0.4));
+  filter: drop-shadow(0 0 6px rgba(123, 94, 167, 0.4));
   animation: lineFlow 1s ease-in-out;
 }
 .diagram-lines line.hit {
   stroke: var(--color-hit-bright); stroke-width: 3; stroke-dasharray: none;
-  filter: drop-shadow(0 0 6px rgba(56, 161, 105, 0.4));
+  filter: drop-shadow(0 0 6px rgba(94, 168, 109, 0.4));
   animation: lineFlow 1s ease-in-out;
 }
-.diagram-lines line.miss { stroke: var(--color-miss); stroke-width: 2; stroke-dasharray: 6 4; opacity: 0.5; }
+.diagram-lines line.miss { stroke: var(--color-miss-soft); stroke-width: 2; stroke-dasharray: 6 4; opacity: 0.5; }
 @keyframes lineFlow {
   0% { opacity: 0.3; stroke-width: 1; }
   50% { opacity: 1; stroke-width: 4; }
   100% { opacity: 1; stroke-width: 3; }
+}
+
+/* --- Keyboard hint --- */
+.keyboard-hint {
+  text-align: center; margin-top: var(--space-sm);
+  font-size: 0.75rem; color: var(--color-text-muted); opacity: 0.7;
+}
+.keyboard-hint kbd {
+  display: inline-block; padding: 1px 6px; border: 1px solid var(--color-border);
+  border-radius: 4px; background: var(--color-surface-warm); font-family: var(--font-mono);
+  font-size: 0.7rem; box-shadow: 0 1px 1px rgba(0,0,0,0.04);
 }
 
 /* --- Algorithm Steps --- */
@@ -455,14 +568,14 @@ h3 { font-family: var(--font-sans); font-size: var(--font-size-xl); font-weight:
   background: var(--color-surface); border: 1px solid var(--color-border);
   border-radius: var(--radius-lg); padding: var(--space-xl);
   transition: all var(--transition-base);
-  box-shadow: 0 1px 3px rgba(0,0,0,0.04);
+  box-shadow: 0 2px 12px rgba(139, 118, 90, 0.06);
   position: relative;
 }
 .step-card:hover { box-shadow: 0 8px 30px rgba(0,0,0,0.08); transform: translateY(-3px); }
 .step-card::after {
   content: ''; position: absolute; bottom: 0; left: 50%; transform: translateX(-50%);
   width: 0; height: 3px;
-  background: linear-gradient(90deg, var(--color-epp), #805ad5);
+  background: linear-gradient(90deg, var(--color-accent), var(--color-epp-warm));
   border-radius: 3px 3px 0 0;
   transition: width 0.3s ease;
 }
@@ -470,12 +583,12 @@ h3 { font-family: var(--font-sans); font-size: var(--font-size-xl); font-weight:
 .step-number {
   display: inline-flex; align-items: center; justify-content: center;
   width: 36px; height: 36px;
-  background: linear-gradient(135deg, var(--color-epp), #805ad5);
+  background: linear-gradient(135deg, var(--color-epp), var(--color-epp-warm));
   color: #fff; font-family: var(--font-sans); font-size: var(--font-size-sm); font-weight: 800;
   border-radius: 50%; margin-bottom: var(--space-md);
-  box-shadow: 0 2px 8px rgba(107, 70, 193, 0.3);
+  box-shadow: 0 2px 8px rgba(123, 94, 167, 0.3);
 }
-.step-card h3 { font-size: var(--font-size-lg); }
+.step-card h3 { font-family: var(--font-serif); font-size: var(--font-size-lg); font-weight: 600; }
 .step-card p { font-size: var(--font-size-sm); color: var(--color-text-secondary); line-height: 1.7; margin-top: var(--space-sm); }
 
 /* --- Scenario Cards --- */
@@ -487,7 +600,7 @@ h3 { font-family: var(--font-sans); font-size: var(--font-size-xl); font-weight:
   background: var(--color-surface); border: 1px solid var(--color-border);
   border-radius: var(--radius-lg); padding: var(--space-xl);
   transition: all var(--transition-base);
-  box-shadow: 0 1px 3px rgba(0,0,0,0.04);
+  box-shadow: 0 2px 12px rgba(139, 118, 90, 0.06);
 }
 .scenario-card:hover { box-shadow: 0 8px 30px rgba(0,0,0,0.08); transform: translateY(-3px); }
 .scenario-icon {
@@ -497,17 +610,20 @@ h3 { font-family: var(--font-sans); font-size: var(--font-size-xl); font-weight:
   transition: transform 0.3s ease;
 }
 .scenario-card:hover .scenario-icon { transform: scale(1.1); }
-.scenario-icon--chat { background: rgba(107, 70, 193, 0.1); }
-.scenario-icon--agent { background: rgba(49, 130, 206, 0.1); }
-.scenario-icon--doc { background: rgba(56, 161, 105, 0.1); }
-.scenario-card h3 { font-size: var(--font-size-lg); margin-bottom: var(--space-sm); }
+.scenario-icon--chat { background: rgba(123, 94, 167, 0.1); color: var(--color-epp); }
+.scenario-icon--agent { background: rgba(90, 127, 181, 0.1); color: var(--color-route); }
+.scenario-icon--doc { background: rgba(94, 168, 109, 0.1); color: var(--color-hit); }
+.scenario-card h3 { font-family: var(--font-serif); font-size: var(--font-size-lg); margin-bottom: var(--space-sm); font-weight: 600; }
 .scenario-card p { font-size: var(--font-size-sm); color: var(--color-text-secondary); line-height: 1.7; }
 .scenario-benefit {
   margin-top: var(--space-md); padding: var(--space-sm) var(--space-md);
-  background: rgba(56, 161, 105, 0.06); border-radius: var(--radius-sm);
+  background: rgba(94, 168, 109, 0.08); border-radius: var(--radius-sm);
   font-size: var(--font-size-sm); font-weight: 600; color: var(--color-hit);
   border-left: 3px solid var(--color-hit-bright);
 }
+
+/* Scenario icon SVGs */
+.scenario-icon svg { width: 24px; height: 24px; }
 
 /* --- Comparison Section --- */
 .comparison-wrapper {
@@ -517,23 +633,25 @@ h3 { font-family: var(--font-sans); font-size: var(--font-size-xl); font-weight:
 .comparison-panel {
   background: var(--color-surface); border: 1px solid var(--color-border);
   border-radius: var(--radius-lg); padding: var(--space-xl);
-  box-shadow: 0 1px 3px rgba(0,0,0,0.04);
+  box-shadow: 0 2px 12px rgba(139, 118, 90, 0.06);
   position: relative; overflow: hidden;
   transition: all var(--transition-base);
 }
 .comparison-panel:hover { box-shadow: 0 8px 24px rgba(0,0,0,0.06); }
-.comparison-panel--rr { border-top: 4px solid var(--color-miss); }
+.comparison-panel--rr { border-top: 4px solid var(--color-miss-soft); }
 .comparison-panel--ca { border-top: 4px solid var(--color-hit-bright); }
 .comparison-panel h3 {
-  font-size: var(--font-size-lg); margin-bottom: var(--space-md);
+  font-family: var(--font-serif); font-size: var(--font-size-lg); font-weight: 600;
+  margin-bottom: var(--space-md);
   display: flex; align-items: center; gap: var(--space-sm);
 }
 .comparison-label {
+  font-family: var(--font-sans);
   font-size: 0.7rem; font-weight: 700; text-transform: uppercase;
   letter-spacing: 0.08em; padding: 2px 10px; border-radius: 12px;
 }
-.comparison-label--rr { background: #fed7d7; color: var(--color-miss); }
-.comparison-label--ca { background: #c6f6d5; color: var(--color-hit); }
+.comparison-label--rr { background: #f8d7da; color: var(--color-miss); }
+.comparison-label--ca { background: #d4edda; color: var(--color-hit); }
 .comparison-visual { display: flex; gap: var(--space-md); justify-content: center; margin: var(--space-lg) 0; }
 .mini-pod {
   width: 80px; padding: var(--space-sm);
@@ -541,12 +659,12 @@ h3 { font-family: var(--font-sans); font-size: var(--font-size-xl); font-weight:
   text-align: center; font-family: var(--font-sans); font-size: 0.7rem; font-weight: 700;
   transition: all 0.5s ease;
 }
-.mini-pod.active { border-color: var(--color-hit-bright); background: rgba(56, 161, 105, 0.04); }
+.mini-pod.active { border-color: var(--color-hit-bright); background: rgba(94, 168, 109, 0.04); }
 .mini-pod .mini-cache { display: flex; flex-wrap: wrap; gap: 2px; justify-content: center; margin-top: var(--space-xs); min-height: 20px; }
 .mini-block { width: 12px; height: 12px; border-radius: 2px; transition: all 0.3s ease; }
-.mini-block--empty { background: #edf2f7; }
+.mini-block--empty { background: var(--color-border-light); }
 .mini-block--filled { background: var(--color-hit-bright); }
-.mini-block--miss { background: var(--color-miss); opacity: 0.4; }
+.mini-block--miss { background: var(--color-miss-soft); opacity: 0.5; }
 .comparison-stats { display: flex; flex-direction: column; gap: var(--space-sm); margin-top: var(--space-md); }
 .comparison-stat { display: flex; justify-content: space-between; align-items: center; font-size: var(--font-size-sm); }
 .comparison-stat-label { color: var(--color-text-secondary); }
@@ -563,28 +681,56 @@ h3 { font-family: var(--font-sans); font-size: var(--font-size-xl); font-weight:
   background: var(--color-surface); border: 1px solid var(--color-border);
   border-radius: var(--radius-lg); padding: var(--space-xl);
   transition: all var(--transition-base);
-  box-shadow: 0 1px 3px rgba(0,0,0,0.04);
+  box-shadow: 0 2px 12px rgba(139, 118, 90, 0.06);
   position: relative; overflow: hidden;
 }
 .faq-item:hover { box-shadow: 0 8px 24px rgba(0,0,0,0.08); transform: translateY(-2px); }
 .faq-item::before {
   content: 'Q'; position: absolute; top: 16px; right: 18px;
-  font-family: var(--font-sans); font-size: 2.5rem; font-weight: 900;
-  color: var(--color-epp); opacity: 0.06; line-height: 1;
+  font-family: var(--font-serif); font-size: 2.5rem; font-weight: 700;
+  color: var(--color-accent); opacity: 0.08; line-height: 1;
 }
 .faq-item h3 {
-  font-size: var(--font-size-base); margin-bottom: var(--space-sm);
-  color: var(--color-epp); font-weight: 700;
+  font-family: var(--font-serif); font-size: var(--font-size-base); font-weight: 600;
+  margin-bottom: var(--space-sm);
+  color: var(--color-epp);
 }
 .faq-item p {
   font-size: var(--font-size-sm); color: var(--color-text-secondary);
   line-height: 1.7; margin: 0;
 }
 
+/* --- Callout box --- */
+.callout-box {
+  max-width: 720px; margin: var(--space-xl) auto 0;
+  padding: var(--space-lg) var(--space-xl);
+  background: var(--color-surface);
+  border-left: 4px solid var(--color-accent);
+  border-radius: 0 var(--radius-md) var(--radius-md) 0;
+  box-shadow: 0 2px 12px rgba(139, 118, 90, 0.06);
+}
+.callout-box p {
+  margin: 0; font-size: var(--font-size-sm); color: var(--color-text-secondary); line-height: 1.7;
+}
+.callout-box strong { color: var(--color-text); }
+
+/* --- Concluding narrative --- */
+.concluding-narrative {
+  max-width: 720px;
+  margin: var(--space-2xl) auto 0;
+  text-align: center;
+  font-family: var(--font-serif);
+  font-size: var(--font-size-lg);
+  font-style: italic;
+  color: var(--color-text-secondary);
+  line-height: 1.9;
+}
+
 /* --- Footer --- */
 .site-footer {
   background: var(--color-surface); border-top: 1px solid var(--color-border);
   padding: var(--space-2xl) 0; text-align: center;
+  position: relative; z-index: 1;
 }
 .footer-content { display: flex; flex-direction: column; align-items: center; gap: var(--space-md); }
 .footer-links { display: flex; gap: var(--space-xl); }
@@ -596,24 +742,6 @@ h3 { font-family: var(--font-sans); font-size: var(--font-size-xl); font-weight:
 .footer-author { font-size: var(--font-size-sm); color: var(--color-text-secondary); }
 .footer-meta { font-size: var(--font-size-sm); color: var(--color-text-muted); }
 
-/* --- Scroll Progress --- */
-.scroll-progress {
-  position: fixed; top: 0; left: 0; height: 3px;
-  background: linear-gradient(90deg, var(--color-epp), var(--color-accent), var(--color-hit-bright));
-  z-index: 200; transition: width 50ms linear; border-radius: 0 2px 2px 0;
-}
-
-/* --- Keyboard hint --- */
-.keyboard-hint {
-  text-align: center; margin-top: var(--space-sm);
-  font-size: 0.75rem; color: var(--color-text-muted); opacity: 0.7;
-}
-.keyboard-hint kbd {
-  display: inline-block; padding: 1px 6px; border: 1px solid var(--color-border);
-  border-radius: 4px; background: #f8f9fa; font-family: var(--font-mono);
-  font-size: 0.7rem; box-shadow: 0 1px 1px rgba(0,0,0,0.06);
-}
-
 /* --- Responsive --- */
 @media (max-width: 1024px) {
   .hero-stats { grid-template-columns: repeat(3, 1fr); }
@@ -624,11 +752,11 @@ h3 { font-family: var(--font-sans); font-size: var(--font-size-xl); font-weight:
   .faq-grid { grid-template-columns: 1fr; }
 }
 @media (max-width: 768px) {
-  :root { --font-size-hero: 3rem; --font-size-3xl: 1.75rem; --font-size-2xl: 1.25rem; }
+  :root { --font-size-hero: 2.5rem; --font-size-3xl: 1.75rem; --font-size-2xl: 1.25rem; }
   .container { padding: 0 var(--space-md); }
-  section { padding: var(--space-2xl) 0; }
+  .chapter { padding: var(--space-3xl) 0 var(--space-2xl); }
   .header-content { flex-direction: column; align-items: flex-start; gap: var(--space-sm); }
-  .hero { padding: 3rem 0 2.5rem; }
+  .hero { padding: 3rem 0 2rem; }
   .hero-stats { grid-template-columns: 1fr; max-width: 400px; }
   .steps-grid, .scenarios-grid { grid-template-columns: 1fr; }
   .diagram-canvas { height: 350px; }
@@ -637,7 +765,7 @@ h3 { font-family: var(--font-sans); font-size: var(--font-size-xl); font-weight:
   .keyboard-hint { display: none; }
 }
 @media (max-width: 480px) {
-  :root { --font-size-hero: 2.5rem; }
+  :root { --font-size-hero: 2rem; }
   .diagram-canvas { height: 300px; }
   .pod { width: 140px; padding: var(--space-sm); }
 }
@@ -645,7 +773,12 @@ h3 { font-family: var(--font-sans); font-size: var(--font-size-xl); font-weight:
 </head>
 <body>
 
-<div class="dot-grid"></div>
+<div class="blob-canvas">
+  <div class="blob blob--peach"></div>
+  <div class="blob blob--lavender"></div>
+  <div class="blob blob--sage"></div>
+  <div class="blob blob--gold"></div>
+</div>
 <div class="scroll-progress"></div>
 
 <header class="site-header">
@@ -666,19 +799,43 @@ h3 { font-family: var(--font-sans); font-size: var(--font-size-xl); font-weight:
   </div>
 </header>
 
-<section class="hero">
-  <div class="hero-orb-accent"></div>
+<!-- ═══════════════════════════════════════════════ -->
+<!-- CHAPTER ONE: The Problem                       -->
+<!-- ═══════════════════════════════════════════════ -->
+<section class="chapter" id="chapter-1">
   <div class="container">
-    <div class="hero-headline reveal">
-      <div class="hero-number" id="heroNumber">Cache-Aware</div>
-      <div class="hero-label">Prefix-Cache-Aware Routing</div>
+    <div class="chapter-marker reveal">
+      <div class="chapter-number">Chapter One</div>
+      <h2 class="chapter-title">The Problem</h2>
     </div>
-    <p class="hero-description reveal reveal-delay-1">
-      Every LLM request starts by computing a KV cache  --  a matrix of attention states for every token in the prompt.
-      When two requests share the same prefix, that computation is identical. llm-d&rsquo;s routing algorithm detects
-      these overlaps and sends requests to the pod that already has the cache, skipping redundant GPU work entirely.
+    <p class="chapter-intro reveal reveal-delay-1">
+      Every time an LLM processes a prompt, it computes a massive matrix of attention states -- the KV cache.
+      When two requests share the same beginning, that computation is identical --
+      yet standard load balancers force every pod to redo it from scratch.
     </p>
-    <div class="hero-stats">
+
+    <div class="problem-grid" style="margin-top: var(--space-2xl);">
+      <div class="problem-card problem-card--bad reveal reveal-delay-2">
+        <h3>Round-Robin Routing</h3>
+        <p>
+          Request 1 goes to Pod A, which computes the full KV cache. Request 2 -- with the exact same system
+          prompt -- goes to Pod B, which has to compute it all over again. The cache sitting in Pod A is wasted.
+          Multiply this across every request, and you are burning GPU cycles recomputing attention states that
+          already exist somewhere in your fleet.
+        </p>
+      </div>
+      <div class="problem-card problem-card--good reveal reveal-delay-3">
+        <h3>Cache-Aware Routing</h3>
+        <p>
+          The EPP (Endpoint Picker Policy) knows what each pod has cached. When Request 2 arrives with the
+          same prefix, the EPP routes it to Pod A -- the pod that already has the cache. Pod A skips the entire
+          prefill phase and goes straight to generating tokens. Zero redundant compute. The longer the shared
+          prefix, the bigger the savings.
+        </p>
+      </div>
+    </div>
+
+    <div class="hero-stats" style="margin-top: var(--space-2xl);">
       <div class="stat-card reveal reveal-delay-1">
         <div class="stat-value" data-count="47.5" data-suffix="x">47.5x</div>
         <div class="stat-label">Faster TTFT</div>
@@ -698,61 +855,184 @@ h3 { font-family: var(--font-sans); font-size: var(--font-size-xl); font-weight:
   </div>
 </section>
 
-<hr class="section-divider">
+<div class="chapter-divider"></div>
 
-<section>
+<!-- ═══════════════════════════════════════════════ -->
+<!-- CHAPTER TWO: The Insight                       -->
+<!-- ═══════════════════════════════════════════════ -->
+<section class="chapter" id="chapter-2">
   <div class="container">
-    <h2 class="reveal">The Problem with Round-Robin</h2>
-    <p class="section-description reveal">
-      Standard load balancers treat inference pods as interchangeable. They scatter requests across replicas
-      with no awareness of what&rsquo;s cached where  --  forcing every pod to recompute KV caches from scratch.
+    <div class="chapter-marker reveal">
+      <div class="chapter-number">Chapter Two</div>
+      <h2 class="chapter-title">The Insight</h2>
+    </div>
+    <p class="chapter-intro reveal reveal-delay-1">
+      The KV cache is not a temporary artifact -- it is a reusable asset. When routing is aware
+      of what each pod has cached, the same computation never has to happen twice.
     </p>
-    <div class="problem-grid">
-      <div class="problem-card problem-card--bad reveal reveal-delay-1">
-        <h3>Round-Robin Routing</h3>
+
+    <!-- How Long Does the Cache Last? -->
+    <div style="margin-top: var(--space-2xl);">
+      <h3 style="font-family: var(--font-serif); font-size: var(--font-size-xl); font-weight: 600; margin-bottom: var(--space-lg); text-align: center;" class="reveal">How Long Does the Cache Last?</h3>
+      <p style="text-align: center; color: var(--color-text-secondary); margin-bottom: var(--space-xl); max-width: 720px; margin-left: auto; margin-right: auto;" class="reveal reveal-delay-1">
+        The most common question people ask. The answer: there is no timer.
+        The prefix cache lives in GPU memory and persists until something pushes it out.
+      </p>
+      <div class="problem-grid reveal reveal-delay-2">
+        <div class="problem-card problem-card--good">
+          <h3>Not time-based -- memory-based</h3>
+          <p>
+            vLLM uses LRU (least recently used) eviction. When GPU memory fills up with cached blocks
+            from many different prompts, the blocks that have not been accessed in the longest time
+            get evicted first. Under low traffic with consistent system prompts, cached blocks can
+            persist indefinitely -- hours, days, as long as the pod is running.
+          </p>
+        </div>
+        <div class="problem-card problem-card--bad">
+          <h3>What clears the cache</h3>
+          <p>
+            Three things evict cached blocks: memory pressure from diverse prompts (LRU eviction),
+            pod restarts (cache starts empty), and GPU memory limits. There is no TTL, no expiration
+            timer, no scheduled flush. If your workload keeps hitting the same system prompt,
+            those blocks stay warm.
+          </p>
+        </div>
+      </div>
+      <div class="callout-box reveal">
         <p>
-          Request 1 goes to Pod A, which computes the full KV cache. Request 2  --  with the exact same system
-          prompt  --  goes to Pod B, which has to compute it all over again. The cache sitting in Pod A is wasted.
-          Multiply this across every request, and you&rsquo;re burning GPU cycles recomputing attention states that
-          already exist somewhere in your fleet.
+          <strong>Why this matters for routing:</strong>
+          Cache-aware routing compounds the benefit. By concentrating requests with the same prefix
+          onto the same pod, llm-d keeps that pod's cache hot for exactly the tokens that matter.
+          The more consistent your prompt patterns, the higher your cache hit rate -- and the
+          longer those blocks persist in GPU memory without eviction.
         </p>
       </div>
-      <div class="problem-card problem-card--good reveal reveal-delay-2">
-        <h3>Cache-Aware Routing</h3>
-        <p>
-          The EPP (Endpoint Picker Policy) knows what each pod has cached. When Request 2 arrives with the
-          same prefix, the EPP routes it to Pod A  --  the pod that already has the cache. Pod A skips the entire
-          prefill phase and goes straight to generating tokens. Zero redundant compute. The longer the shared
-          prefix, the bigger the savings.
-        </p>
+    </div>
+
+    <!-- Where It Matters Most -->
+    <div style="margin-top: var(--space-3xl);">
+      <h3 style="font-family: var(--font-serif); font-size: var(--font-size-xl); font-weight: 600; margin-bottom: var(--space-sm); text-align: center;" class="reveal">Where It Matters Most</h3>
+      <p style="text-align: center; color: var(--color-text-secondary); margin-bottom: var(--space-xl); max-width: 720px; margin-left: auto; margin-right: auto;" class="reveal reveal-delay-1">
+        Prefix-cache-aware routing delivers the biggest gains in workloads with high prefix overlap.
+        These three patterns are where the math works hardest in your favor.
+      </p>
+      <div class="scenarios-grid">
+        <div class="scenario-card reveal reveal-delay-1">
+          <div class="scenario-icon scenario-icon--chat">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+          </div>
+          <h3>Multi-Turn Conversations</h3>
+          <p>
+            Each turn in a conversation builds on the previous one. Turn 3's prompt contains all of turns 1 and 2
+            as prefix. Routing to the same pod means turns 1-2 are already cached -- only the new user message
+            needs prefilling.
+          </p>
+          <div class="scenario-benefit">Turn N reuses 100% of turns 1 through N-1</div>
+        </div>
+        <div class="scenario-card reveal reveal-delay-2">
+          <div class="scenario-icon scenario-icon--agent">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
+          </div>
+          <h3>Agentic Workflows</h3>
+          <p>
+            Agent frameworks send parallel requests that all share the same system prompt. The first call
+            computes the cache; every subsequent parallel call to the same pod skips the system prompt prefill
+            entirely. 10 parallel tool calls = 1 cold prefill + 9 cache hits.
+          </p>
+          <div class="scenario-benefit">N parallel calls = 1 prefill + (N-1) cache hits</div>
+        </div>
+        <div class="scenario-card reveal reveal-delay-3">
+          <div class="scenario-icon scenario-icon--doc">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>
+          </div>
+          <h3>Long-Context Documents</h3>
+          <p>
+            When users ask multiple questions about the same document, the document tokens are identical across
+            requests. A 32K-token document cached on Pod A means every follow-up question skips 32K tokens of
+            prefill computation -- that is where the 47.5x speedup comes from.
+          </p>
+          <div class="scenario-benefit">32K cached tokens = 3,700ms to 79ms TTFT</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Comparison Side-by-Side -->
+    <div style="margin-top: var(--space-3xl);">
+      <h3 style="font-family: var(--font-serif); font-size: var(--font-size-xl); font-weight: 600; margin-bottom: var(--space-sm); text-align: center;" class="reveal">Round-Robin vs Cache-Aware</h3>
+      <p style="text-align: center; color: var(--color-text-secondary); margin-bottom: var(--space-xl); max-width: 720px; margin-left: auto; margin-right: auto;" class="reveal reveal-delay-1">
+        Side-by-side comparison of what happens when 5 requests with the same system prompt
+        hit a 3-pod cluster.
+      </p>
+      <div class="comparison-wrapper">
+        <div class="comparison-panel comparison-panel--rr reveal reveal-delay-1">
+          <h3>Round-Robin <span class="comparison-label comparison-label--rr">Baseline</span></h3>
+          <p style="font-size: 0.9rem; color: var(--color-text-secondary); margin-bottom: var(--space-md);">
+            Requests scatter across pods. Each pod computes the system prompt KV cache independently.
+          </p>
+          <div class="comparison-visual" id="rrVisual">
+            <div class="mini-pod"><div>Pod 1</div><div class="mini-cache" id="rrCache1"></div></div>
+            <div class="mini-pod"><div>Pod 2</div><div class="mini-cache" id="rrCache2"></div></div>
+            <div class="mini-pod"><div>Pod 3</div><div class="mini-cache" id="rrCache3"></div></div>
+          </div>
+          <div class="comparison-stats">
+            <div class="comparison-stat"><span class="comparison-stat-label">Cache hits</span><span class="comparison-stat-value comparison-stat-value--bad">0 / 5</span></div>
+            <div class="comparison-stat"><span class="comparison-stat-label">Cold prefills</span><span class="comparison-stat-value comparison-stat-value--bad">5 / 5</span></div>
+            <div class="comparison-stat"><span class="comparison-stat-label">Wasted compute</span><span class="comparison-stat-value comparison-stat-value--bad">67%</span></div>
+          </div>
+        </div>
+        <div class="comparison-panel comparison-panel--ca reveal reveal-delay-2">
+          <h3>Cache-Aware <span class="comparison-label comparison-label--ca">llm-d</span></h3>
+          <p style="font-size: 0.9rem; color: var(--color-text-secondary); margin-bottom: var(--space-md);">
+            EPP routes all requests with the same prefix to the pod that already has the cache.
+          </p>
+          <div class="comparison-visual" id="caVisual">
+            <div class="mini-pod active"><div>Pod 1</div><div class="mini-cache" id="caCache1"></div></div>
+            <div class="mini-pod"><div>Pod 2</div><div class="mini-cache" id="caCache2"></div></div>
+            <div class="mini-pod"><div>Pod 3</div><div class="mini-cache" id="caCache3"></div></div>
+          </div>
+          <div class="comparison-stats">
+            <div class="comparison-stat"><span class="comparison-stat-label">Cache hits</span><span class="comparison-stat-value comparison-stat-value--good">4 / 5</span></div>
+            <div class="comparison-stat"><span class="comparison-stat-label">Cold prefills</span><span class="comparison-stat-value comparison-stat-value--good">1 / 5</span></div>
+            <div class="comparison-stat"><span class="comparison-stat-label">Wasted compute</span><span class="comparison-stat-value comparison-stat-value--good">0%</span></div>
+          </div>
+        </div>
       </div>
     </div>
   </div>
 </section>
 
-<hr class="section-divider">
+<div class="chapter-divider"></div>
 
-<section class="diagram-section">
+<!-- ═══════════════════════════════════════════════ -->
+<!-- CHAPTER THREE: The Algorithm                   -->
+<!-- ═══════════════════════════════════════════════ -->
+<section class="chapter diagram-section" id="chapter-3">
   <div class="container">
-    <h2 class="reveal">See It in Action</h2>
-    <p class="section-description reveal">
+    <div class="chapter-marker reveal">
+      <div class="chapter-number">Chapter Three</div>
+      <h2 class="chapter-title">The Algorithm</h2>
+    </div>
+    <p class="chapter-intro reveal reveal-delay-1">
       Watch how the EPP routes requests based on cached prefix state.
       Step through each scenario to see cache hits, misses, and the scoring algorithm at work.
     </p>
-    <div class="diagram-wrapper reveal">
+    <div class="diagram-wrapper reveal reveal-delay-2">
       <div class="scenario-tabs">
         <button class="scenario-tab active" data-scenario="cold-start">Cold Start</button>
         <button class="scenario-tab" data-scenario="cache-hit">Cache Hit</button>
         <button class="scenario-tab" data-scenario="multi-turn">Multi-Turn</button>
         <button class="scenario-tab" data-scenario="agentic">Agentic Workflow</button>
       </div>
-      <div class="diagram-controls">
-        <button id="prevStep">&#9664; Prev</button>
+      <div class="diagram-controls" id="diagramControls" style="display: none;">
+        <button id="prevStep">Prev</button>
         <span class="step-indicator" id="stepIndicator">Step 1 / 4</span>
-        <button id="nextStep">Next &#9654;</button>
-        <button id="playPause">&#9654; Play</button>
+        <button id="nextStep">Next</button>
+        <button id="playPause">Play</button>
       </div>
       <div class="diagram-canvas" id="diagramCanvas">
+        <div class="start-button-wrapper" id="startOverlay">
+          <button class="start-button" id="startBtn">Watch a Request Get Routed</button>
+        </div>
         <svg class="diagram-lines" id="diagramLines">
           <line id="line-epp-pod1" x1="50%" y1="35%" x2="15%" y2="70%"/>
           <line id="line-epp-pod2" x1="50%" y1="35%" x2="50%" y2="70%"/>
@@ -781,229 +1061,110 @@ h3 { font-family: var(--font-sans); font-size: var(--font-size-xl); font-weight:
         </div>
       </div>
       <div class="diagram-narration" id="narration">
-        Click &ldquo;Next&rdquo; or &ldquo;Play&rdquo; to start the animation. Select a scenario above to see different routing patterns.
+        Select a scenario above and press the button to begin. Each scenario shows a different routing pattern.
       </div>
-      <div class="keyboard-hint">Use <kbd>&larr;</kbd> <kbd>&rarr;</kbd> arrow keys to step through</div>
+      <div class="keyboard-hint">Use <kbd>&larr;</kbd> <kbd>&rarr;</kbd> arrow keys or <kbd>Space</kbd> to step through</div>
     </div>
   </div>
 </section>
 
-<hr class="section-divider">
+<div class="chapter-divider"></div>
 
-<section>
+<!-- ═══════════════════════════════════════════════ -->
+<!-- CHAPTER FOUR: The Impact                       -->
+<!-- ═══════════════════════════════════════════════ -->
+<section class="chapter" id="chapter-4">
   <div class="container">
-    <h2 class="reveal">How the Algorithm Works</h2>
-    <p class="section-description reveal">
+    <div class="chapter-marker reveal">
+      <div class="chapter-number">Chapter Four</div>
+      <h2 class="chapter-title">The Impact</h2>
+    </div>
+    <p class="chapter-intro reveal reveal-delay-1">
       Four steps from request to routed response. The EPP makes this decision in microseconds,
       before the request ever reaches a vLLM pod.
     </p>
-    <div class="steps-grid">
+
+    <div class="steps-grid" style="margin-top: var(--space-2xl);">
       <div class="step-card reveal reveal-delay-1">
         <div class="step-number">1</div>
         <h3>Request Arrives</h3>
-        <p>A chat completion request hits the Gateway API. The EPP intercepts it and extracts the token prefix  --  the sequence of tokens that make up the prompt (system message + conversation history).</p>
+        <p>A chat completion request hits the Gateway API. The EPP intercepts it and extracts the token prefix -- the sequence of tokens that make up the prompt (system message + conversation history).</p>
       </div>
       <div class="step-card reveal reveal-delay-2">
         <div class="step-number">2</div>
         <h3>Query Cache State</h3>
-        <p>The EPP maintains a near-real-time map of what each pod has cached. It checks every replica&rsquo;s cached prefix blocks against the incoming request&rsquo;s token sequence.</p>
+        <p>The EPP maintains a near-real-time map of what each pod has cached. It checks every replica's cached prefix blocks against the incoming request's token sequence.</p>
       </div>
       <div class="step-card reveal reveal-delay-3">
         <div class="step-number">3</div>
         <h3>Score by Overlap</h3>
-        <p>Each pod gets a score based on the longest prefix match  --  how many contiguous token blocks from the start of the request are already in that pod&rsquo;s KV cache. More blocks matched = higher score.</p>
+        <p>Each pod gets a score based on the longest prefix match -- how many contiguous token blocks from the start of the request are already in that pod's KV cache. More blocks matched = higher score.</p>
       </div>
       <div class="step-card reveal reveal-delay-4">
         <div class="step-number">4</div>
         <h3>Route to Best Match</h3>
-        <p>The request is routed to the highest-scoring pod. On a full cache hit, the pod skips the entire prefill phase  --  it already has the attention states computed and goes straight to generating new tokens.</p>
+        <p>The request is routed to the highest-scoring pod. On a full cache hit, the pod skips the entire prefill phase -- it already has the attention states computed and goes straight to generating new tokens.</p>
       </div>
     </div>
-  </div>
-</section>
 
-<hr class="section-divider">
-
-<section>
-  <div class="container">
-    <h2 class="reveal">Where It Matters Most</h2>
-    <p class="section-description reveal">
-      Prefix-cache-aware routing delivers the biggest gains in workloads with high prefix overlap.
-      These three patterns are where the math works hardest in your favor.
-    </p>
-    <div class="scenarios-grid">
-      <div class="scenario-card reveal reveal-delay-1">
-        <div class="scenario-icon scenario-icon--chat">&#128172;</div>
-        <h3>Multi-Turn Conversations</h3>
-        <p>
-          Each turn in a conversation builds on the previous one. Turn 3&rsquo;s prompt contains all of turns 1 and 2
-          as prefix. Routing to the same pod means turns 1&ndash;2 are already cached  --  only the new user message
-          needs prefilling.
-        </p>
-        <div class="scenario-benefit">Turn N reuses 100% of turns 1 through N-1</div>
-      </div>
-      <div class="scenario-card reveal reveal-delay-2">
-        <div class="scenario-icon scenario-icon--agent">&#129302;</div>
-        <h3>Agentic Workflows</h3>
-        <p>
-          Agent frameworks send parallel requests that all share the same system prompt. The first call
-          computes the cache; every subsequent parallel call to the same pod skips the system prompt prefill
-          entirely. 10 parallel tool calls = 1 cold prefill + 9 cache hits.
-        </p>
-        <div class="scenario-benefit">N parallel calls = 1 prefill + (N-1) cache hits</div>
-      </div>
-      <div class="scenario-card reveal reveal-delay-3">
-        <div class="scenario-icon scenario-icon--doc">&#128196;</div>
-        <h3>Long-Context Documents</h3>
-        <p>
-          When users ask multiple questions about the same document, the document tokens are identical across
-          requests. A 32K-token document cached on Pod A means every follow-up question skips 32K tokens of
-          prefill computation  --  that&rsquo;s where the 47.5x speedup comes from.
-        </p>
-        <div class="scenario-benefit">32K cached tokens = 3,700ms &rarr; 79ms TTFT</div>
-      </div>
-    </div>
-  </div>
-</section>
-
-<hr class="section-divider">
-
-<section>
-  <div class="container">
-    <h2 class="reveal">How Long Does the Cache Last?</h2>
-    <p class="section-description reveal">
-      The most common question people ask. The answer: there is no timer.
-      The prefix cache lives in GPU memory and persists until something pushes it out.
-    </p>
-    <div class="problem-grid reveal">
-      <div class="problem-card problem-card--good">
-        <h3>Not time-based  --  memory-based</h3>
-        <p>
-          vLLM uses LRU (least recently used) eviction. When GPU memory fills up with cached blocks
-          from many different prompts, the blocks that haven&rsquo;t been accessed in the longest time
-          get evicted first. Under low traffic with consistent system prompts, cached blocks can
-          persist indefinitely  --  hours, days, as long as the pod is running.
-        </p>
-      </div>
-      <div class="problem-card problem-card--bad">
-        <h3>What clears the cache</h3>
-        <p>
-          Three things evict cached blocks: memory pressure from diverse prompts (LRU eviction),
-          pod restarts (cache starts empty), and GPU memory limits. There is no TTL, no expiration
-          timer, no scheduled flush. If your workload keeps hitting the same system prompt,
-          those blocks stay warm.
-        </p>
-      </div>
-    </div>
-    <div style="max-width: 720px; margin: var(--space-xl) auto 0; padding: var(--space-lg) var(--space-xl); background: var(--color-surface); border-left: 4px solid var(--color-epp); border-radius: 0 var(--radius-md) var(--radius-md) 0; box-shadow: 0 1px 3px rgba(0,0,0,0.04);" class="reveal">
-      <p style="margin: 0; font-size: var(--font-size-sm); color: var(--color-text-secondary); line-height: 1.7;">
-        <strong style="color: var(--color-text);">Why this matters for routing:</strong>
-        Cache-aware routing compounds the benefit. By concentrating requests with the same prefix
-        onto the same pod, llm-d keeps that pod&rsquo;s cache hot for exactly the tokens that matter.
-        The more consistent your prompt patterns, the higher your cache hit rate  --  and the
-        longer those blocks persist in GPU memory without eviction.
+    <!-- FAQ -->
+    <div style="margin-top: var(--space-3xl);">
+      <h3 style="font-family: var(--font-serif); font-size: var(--font-size-xl); font-weight: 600; margin-bottom: var(--space-sm); text-align: center;" class="reveal">Common Questions</h3>
+      <p style="text-align: center; color: var(--color-text-secondary); margin-bottom: var(--space-xl); max-width: 720px; margin-left: auto; margin-right: auto;" class="reveal reveal-delay-1">
+        The questions people ask most about prefix-cache-aware routing --
+        from conference halls to Slack channels.
       </p>
+      <div class="faq-grid">
+        <div class="faq-item reveal reveal-delay-1">
+          <h3>Can the cache be shared across pods?</h3>
+          <p>No. The KV cache lives in each pod's GPU memory -- Pod A cannot read blocks from Pod B's GPU. This is exactly why routing matters: if you cannot share the cache, send the request to the pod that already has it.</p>
+        </div>
+        <div class="faq-item reveal reveal-delay-2">
+          <h3>What happens when a pod restarts?</h3>
+          <p>Its cache is gone. New pods start cold. The EPP discovers them automatically and routes based on load until they build up cache. Existing pods keep their warm caches while new ones ramp up.</p>
+        </div>
+        <div class="faq-item reveal reveal-delay-1">
+          <h3>Does this add latency?</h3>
+          <p>The EPP scoring adds microseconds -- it is a hash comparison across a small set of pods. The routing cost is invisible. The savings from skipping prefill (hundreds of ms to seconds) are not.</p>
+        </div>
+        <div class="faq-item reveal reveal-delay-2">
+          <h3>Does it work with any model?</h3>
+          <p>Any model served by vLLM with automatic prefix caching enabled (the default). Llama, Mistral, Qwen, Falcon -- any transformer. The cache operates at the KV block level, a property of attention, not specific model weights.</p>
+        </div>
+        <div class="faq-item reveal reveal-delay-1">
+          <h3>What is the minimum prefix length?</h3>
+          <p>vLLM caches in blocks of 16 tokens. You need at least 16 shared tokens to see a hit. In practice, even a short system prompt like "You are a helpful assistant" exceeds this once tokenized.</p>
+        </div>
+        <div class="faq-item reveal reveal-delay-2">
+          <h3>What about different system prompts?</h3>
+          <p>They cache independently. User A's requests cluster on one pod, User B's may cluster on another. Multiple distinct caches coexist on a single pod as long as GPU memory allows.</p>
+        </div>
+        <div class="faq-item reveal reveal-delay-1">
+          <h3>What if all pods are cold?</h3>
+          <p>The EPP falls back to load-based routing -- fewest active requests wins. That first request computes the cache, and all subsequent requests with the same prefix benefit from it.</p>
+        </div>
+        <div class="faq-item reveal reveal-delay-2">
+          <h3>Does it work with LoRA adapters?</h3>
+          <p>Yes. Prefix caching operates on the base model's KV blocks. LoRA modifies weights but the caching mechanism is the same. Requests with the same base prefix still get cache hits regardless of which adapter is applied.</p>
+        </div>
+        <div class="faq-item reveal reveal-delay-1">
+          <h3>How much GPU memory does the cache use?</h3>
+          <p>vLLM uses whatever GPU memory is not active for inference -- no separate allocation or config. On an H200 with 141GB serving a 70B model in FP8 (~70GB), there is substantial room for cached blocks. vLLM manages this automatically.</p>
+        </div>
+        <div class="faq-item reveal reveal-delay-2">
+          <h3>Do I need to change my application code?</h3>
+          <p>No. Cache-aware routing is a routing-layer optimization. Your prompts, model, and application stay the same. Swap in llm-d as your inference gateway and cache reuse happens automatically -- no SDK changes, no prompt modifications.</p>
+        </div>
+      </div>
     </div>
-  </div>
-</section>
 
-<hr class="section-divider">
-
-<section>
-  <div class="container">
-    <h2 class="reveal">Round-Robin vs Cache-Aware</h2>
-    <p class="section-description reveal">
-      Side-by-side comparison of what happens when 5 requests with the same system prompt
-      hit a 3-pod cluster.
+    <p class="concluding-narrative reveal">
+      Prefix-cache-aware routing turns a simple observation -- that many requests share the same beginning --
+      into a powerful optimization. By routing with awareness of what each pod already knows,
+      llm-d transforms redundant GPU compute into instant cache hits.
+      The result is faster time-to-first-token, lower cost per request,
+      and infrastructure that gets smarter the more consistent your workloads become.
     </p>
-    <div class="comparison-wrapper">
-      <div class="comparison-panel comparison-panel--rr reveal reveal-delay-1">
-        <h3>Round-Robin <span class="comparison-label comparison-label--rr">Baseline</span></h3>
-        <p style="font-size: 0.9rem; color: var(--color-text-secondary); margin-bottom: var(--space-md);">
-          Requests scatter across pods. Each pod computes the system prompt KV cache independently.
-        </p>
-        <div class="comparison-visual" id="rrVisual">
-          <div class="mini-pod"><div>Pod 1</div><div class="mini-cache" id="rrCache1"></div></div>
-          <div class="mini-pod"><div>Pod 2</div><div class="mini-cache" id="rrCache2"></div></div>
-          <div class="mini-pod"><div>Pod 3</div><div class="mini-cache" id="rrCache3"></div></div>
-        </div>
-        <div class="comparison-stats">
-          <div class="comparison-stat"><span class="comparison-stat-label">Cache hits</span><span class="comparison-stat-value comparison-stat-value--bad">0 / 5</span></div>
-          <div class="comparison-stat"><span class="comparison-stat-label">Cold prefills</span><span class="comparison-stat-value comparison-stat-value--bad">5 / 5</span></div>
-          <div class="comparison-stat"><span class="comparison-stat-label">Wasted compute</span><span class="comparison-stat-value comparison-stat-value--bad">67%</span></div>
-        </div>
-      </div>
-      <div class="comparison-panel comparison-panel--ca reveal reveal-delay-2">
-        <h3>Cache-Aware <span class="comparison-label comparison-label--ca">llm-d</span></h3>
-        <p style="font-size: 0.9rem; color: var(--color-text-secondary); margin-bottom: var(--space-md);">
-          EPP routes all requests with the same prefix to the pod that already has the cache.
-        </p>
-        <div class="comparison-visual" id="caVisual">
-          <div class="mini-pod active"><div>Pod 1</div><div class="mini-cache" id="caCache1"></div></div>
-          <div class="mini-pod"><div>Pod 2</div><div class="mini-cache" id="caCache2"></div></div>
-          <div class="mini-pod"><div>Pod 3</div><div class="mini-cache" id="caCache3"></div></div>
-        </div>
-        <div class="comparison-stats">
-          <div class="comparison-stat"><span class="comparison-stat-label">Cache hits</span><span class="comparison-stat-value comparison-stat-value--good">4 / 5</span></div>
-          <div class="comparison-stat"><span class="comparison-stat-label">Cold prefills</span><span class="comparison-stat-value comparison-stat-value--good">1 / 5</span></div>
-          <div class="comparison-stat"><span class="comparison-stat-label">Wasted compute</span><span class="comparison-stat-value comparison-stat-value--good">0%</span></div>
-        </div>
-      </div>
-    </div>
-  </div>
-</section>
-
-<hr class="section-divider">
-
-<section>
-  <div class="container">
-    <h2 class="reveal">Common Questions</h2>
-    <p class="section-description reveal">
-      The questions people ask most about prefix-cache-aware routing  -- 
-      from conference halls to Slack channels.
-    </p>
-    <div class="faq-grid">
-      <div class="faq-item reveal reveal-delay-1">
-        <h3>Can the cache be shared across pods?</h3>
-        <p>No. The KV cache lives in each pod&rsquo;s GPU memory  --  Pod A cannot read blocks from Pod B&rsquo;s GPU. This is exactly why routing matters: if you can&rsquo;t share the cache, send the request to the pod that already has it.</p>
-      </div>
-      <div class="faq-item reveal reveal-delay-2">
-        <h3>What happens when a pod restarts?</h3>
-        <p>Its cache is gone. New pods start cold. The EPP discovers them automatically and routes based on load until they build up cache. Existing pods keep their warm caches while new ones ramp up.</p>
-      </div>
-      <div class="faq-item reveal reveal-delay-1">
-        <h3>Does this add latency?</h3>
-        <p>The EPP scoring adds microseconds  --  it&rsquo;s a hash comparison across a small set of pods. The routing cost is invisible. The savings from skipping prefill (hundreds of ms to seconds) are not.</p>
-      </div>
-      <div class="faq-item reveal reveal-delay-2">
-        <h3>Does it work with any model?</h3>
-        <p>Any model served by vLLM with automatic prefix caching enabled (the default). Llama, Mistral, Qwen, Falcon  --  any transformer. The cache operates at the KV block level, a property of attention, not specific model weights.</p>
-      </div>
-      <div class="faq-item reveal reveal-delay-1">
-        <h3>What&rsquo;s the minimum prefix length?</h3>
-        <p>vLLM caches in blocks of 16 tokens. You need at least 16 shared tokens to see a hit. In practice, even a short system prompt like &ldquo;You are a helpful assistant&rdquo; exceeds this once tokenized.</p>
-      </div>
-      <div class="faq-item reveal reveal-delay-2">
-        <h3>What about different system prompts?</h3>
-        <p>They cache independently. User A&rsquo;s requests cluster on one pod, User B&rsquo;s may cluster on another. Multiple distinct caches coexist on a single pod as long as GPU memory allows.</p>
-      </div>
-      <div class="faq-item reveal reveal-delay-1">
-        <h3>What if all pods are cold?</h3>
-        <p>The EPP falls back to load-based routing  --  fewest active requests wins. That first request computes the cache, and all subsequent requests with the same prefix benefit from it.</p>
-      </div>
-      <div class="faq-item reveal reveal-delay-2">
-        <h3>Does it work with LoRA adapters?</h3>
-        <p>Yes. Prefix caching operates on the base model&rsquo;s KV blocks. LoRA modifies weights but the caching mechanism is the same. Requests with the same base prefix still get cache hits regardless of which adapter is applied.</p>
-      </div>
-      <div class="faq-item reveal reveal-delay-1">
-        <h3>How much GPU memory does the cache use?</h3>
-        <p>vLLM uses whatever GPU memory isn&rsquo;t active for inference  --  no separate allocation or config. On an H200 with 141GB serving a 70B model in FP8 (~70GB), there&rsquo;s substantial room for cached blocks. vLLM manages this automatically.</p>
-      </div>
-      <div class="faq-item reveal reveal-delay-2">
-        <h3>Do I need to change my application code?</h3>
-        <p>No. Cache-aware routing is a routing-layer optimization. Your prompts, model, and application stay the same. Swap in llm-d as your inference gateway and cache reuse happens automatically  --  no SDK changes, no prompt modifications.</p>
-      </div>
-    </div>
   </div>
 </section>
 
@@ -1015,8 +1176,8 @@ h3 { font-family: var(--font-sans); font-size: var(--font-size-xl); font-weight:
         <a href="https://github.com/llm-d/llm-d" target="_blank">GitHub</a>
         <a href="https://cloud.redhat.com/blog/tag/llm-d" target="_blank">Red Hat Blog</a>
       </div>
-      <div class="footer-author">Markell Rawls &middot; Developer Advocate &middot; Red Hat</div>
-      <div class="footer-meta">Demonstrated on Red Hat OpenShift with NVIDIA H200 GPUs &middot; June 2026</div>
+      <div class="footer-author">Markell Rawls -- Developer Advocate -- Red Hat</div>
+      <div class="footer-meta">Demonstrated on Red Hat OpenShift with NVIDIA H200 GPUs -- June 2026</div>
     </div>
   </div>
 </footer>
@@ -1025,9 +1186,7 @@ h3 { font-family: var(--font-sans); font-size: var(--font-size-xl); font-weight:
 (function () {
   'use strict';
 
-  // ── No JS-dependent reveal system  --  pure CSS animations handle entrance ──
-
-  // ── Scroll progress bar ──
+  // -- Scroll progress bar --
   function initScrollProgress() {
     var bar = document.querySelector('.scroll-progress');
     if (!bar) return;
@@ -1039,7 +1198,7 @@ h3 { font-family: var(--font-sans); font-size: var(--font-size-xl); font-weight:
     }, { passive: true });
   }
 
-  // ── Stat count-up animation ──
+  // -- Stat count-up animation --
   function initCountUp() {
     var statEls = document.querySelectorAll('.stat-value[data-count]');
     if (!('IntersectionObserver' in window)) return;
@@ -1068,24 +1227,24 @@ h3 { font-family: var(--font-sans); font-size: var(--font-size-xl); font-weight:
     statEls.forEach(function (el) { observer.observe(el); });
   }
 
-  // ── Scenario definitions ──
+  // -- Scenario definitions --
   var SCENARIOS = {
     'cold-start': {
       title: 'Cold Start',
       steps: [
         {
           narration: 'A user sends their first chat request. The EPP receives the request and checks all pods for cached prefix blocks.',
-          request: 'POST /v1/chat  --  "You are a helpful assistant. What is Kubernetes?"',
+          request: 'POST /v1/chat -- "You are a helpful assistant. What is Kubernetes?"',
           scores: [0, 0, 0], scoreLabels: ['0 blocks', '0 blocks', '0 blocks'], scoreClasses: ['zero', 'zero', 'zero'],
           routeTo: null, caches: [[], [], []], activeLines: ['req-epp'], podStates: ['', '', '']
         },
         {
-          narration: 'No pod has any cached blocks  --  all scores are zero. The EPP picks Pod 1 (lowest load). This will be a cold start  --  full prefill computation required.',
+          narration: 'No pod has any cached blocks -- all scores are zero. The EPP picks Pod 1 (lowest load). This will be a cold start -- full prefill computation required.',
           request: null, scores: [0, 0, 0], scoreLabels: ['0 blocks', '0 blocks', '0 blocks'], scoreClasses: ['zero', 'zero', 'zero'],
           routeTo: null, caches: [[], [], []], activeLines: [], podStates: ['', '', '']
         },
         {
-          narration: 'The EPP routes the request to Pod 1. Pod 1 computes the full KV cache from scratch  --  system prompt + user message. This takes ~3,700ms at 32K tokens.',
+          narration: 'The EPP routes the request to Pod 1. Pod 1 computes the full KV cache from scratch -- system prompt + user message. This takes ~3,700ms at 32K tokens.',
           request: null, scores: null, routeTo: 1, caches: [[], [], []], activeLines: ['epp-pod1'], podStates: ['highlighted', '', '']
         },
         {
@@ -1101,24 +1260,24 @@ h3 { font-family: var(--font-sans); font-size: var(--font-size-xl); font-weight:
       steps: [
         {
           narration: 'Pod 1 has cached blocks from the previous request (system prompt). A new request arrives with the same system prompt but a different user question.',
-          request: 'POST /v1/chat  --  "You are a helpful assistant. Explain containers."',
+          request: 'POST /v1/chat -- "You are a helpful assistant. Explain containers."',
           scores: null, caches: [['S', 'S', 'S', 'S'], [], []], cacheClasses: [['filled', 'filled', 'filled', 'filled'], [], []],
           activeLines: ['req-epp'], podStates: ['', '', '']
         },
         {
           narration: 'The EPP computes prefix overlap: Pod 1 has 4 blocks matching the system prompt prefix. Pods 2 and 3 have nothing. Pod 1 scores highest.',
-          request: null, scores: [4, 0, 0], scoreLabels: ['4 blocks ★', '0 blocks', '0 blocks'], scoreClasses: ['high', 'zero', 'zero'],
+          request: null, scores: [4, 0, 0], scoreLabels: ['4 blocks', '0 blocks', '0 blocks'], scoreClasses: ['high', 'zero', 'zero'],
           caches: [['S', 'S', 'S', 'S'], [], []], cacheClasses: [['match', 'match', 'match', 'match'], [], []],
           activeLines: [], podStates: ['highlighted', '', '']
         },
         {
-          narration: 'The EPP routes to Pod 1  --  the only pod with a cache match. Pod 1 skips the system prompt prefill entirely and only computes the new user message tokens.',
+          narration: 'The EPP routes to Pod 1 -- the only pod with a cache match. Pod 1 skips the system prompt prefill entirely and only computes the new user message tokens.',
           request: null, scores: null, routeTo: 1,
           caches: [['S', 'S', 'S', 'S'], [], []], cacheClasses: [['match', 'match', 'match', 'match'], [], []],
           activeLines: ['epp-pod1'], podStates: ['highlighted', '', '']
         },
         {
-          narration: 'Cache hit! Pod 1 reused 4 blocks of cached computation. Only the new user question needed prefilling  --  a fraction of the total work. TTFT drops from seconds to milliseconds.',
+          narration: 'Cache hit! Pod 1 reused 4 blocks of cached computation. Only the new user question needed prefilling -- a fraction of the total work. TTFT drops from seconds to milliseconds.',
           request: null, scores: null, routeTo: null,
           caches: [['S', 'S', 'S', 'S', 'U'], [], []], cacheClasses: [['filled', 'filled', 'filled', 'filled', 'new'], [], []],
           activeLines: [], podStates: ['highlighted', '', '']
@@ -1129,7 +1288,7 @@ h3 { font-family: var(--font-sans); font-size: var(--font-size-xl); font-weight:
       title: 'Multi-Turn Conversation',
       steps: [
         {
-          narration: 'Turn 1 completed on Pod 1: system prompt + first Q&A are cached (6 blocks). Now the user sends Turn 2  --  the prompt includes all of Turn 1 as prefix.',
+          narration: 'Turn 1 completed on Pod 1: system prompt + first Q&A are cached (6 blocks). Now the user sends Turn 2 -- the prompt includes all of Turn 1 as prefix.',
           request: 'Turn 2: "You are a helpful assistant. [Turn 1 Q&A] Follow-up question..."',
           scores: null, caches: [['S', 'S', 'Q', 'A', 'Q', 'A'], [], ['S', 'S']],
           cacheClasses: [['filled', 'filled', 'filled', 'filled', 'filled', 'filled'], [], ['filled', 'filled']],
@@ -1137,20 +1296,20 @@ h3 { font-family: var(--font-sans); font-size: var(--font-size-xl); font-weight:
         },
         {
           narration: 'EPP scores each pod: Pod 1 has 6 blocks matching the full Turn 1 prefix. Pod 3 has only 2 blocks (just the system prompt). Pod 2 has nothing. Pod 1 wins by a wide margin.',
-          request: null, scores: [6, 0, 2], scoreLabels: ['6 blocks ★', '0 blocks', '2 blocks'], scoreClasses: ['high', 'zero', 'low'],
+          request: null, scores: [6, 0, 2], scoreLabels: ['6 blocks', '0 blocks', '2 blocks'], scoreClasses: ['high', 'zero', 'low'],
           caches: [['S', 'S', 'Q', 'A', 'Q', 'A'], [], ['S', 'S']],
           cacheClasses: [['match', 'match', 'match', 'match', 'match', 'match'], [], ['filled', 'filled']],
           activeLines: [], podStates: ['highlighted', '', '']
         },
         {
-          narration: 'Routed to Pod 1. It skips all 6 cached blocks and only prefills the new Turn 2 question. Each additional turn compounds the savings  --  more cached prefix = less new compute.',
+          narration: 'Routed to Pod 1. It skips all 6 cached blocks and only prefills the new Turn 2 question. Each additional turn compounds the savings -- more cached prefix = less new compute.',
           request: null, scores: null, routeTo: 1,
           caches: [['S', 'S', 'Q', 'A', 'Q', 'A'], [], ['S', 'S']],
           cacheClasses: [['match', 'match', 'match', 'match', 'match', 'match'], [], ['filled', 'filled']],
           activeLines: ['epp-pod1'], podStates: ['highlighted', '', '']
         },
         {
-          narration: 'Turn 2 done. Pod 1 now has 8 blocks cached  --  the entire conversation history. Turn 3 will reuse all 8 blocks. Each turn gets faster as the cached prefix grows longer.',
+          narration: 'Turn 2 done. Pod 1 now has 8 blocks cached -- the entire conversation history. Turn 3 will reuse all 8 blocks. Each turn gets faster as the cached prefix grows longer.',
           request: null, scores: null, routeTo: null,
           caches: [['S', 'S', 'Q', 'A', 'Q', 'A', 'Q', 'A'], [], ['S', 'S']],
           cacheClasses: [['filled', 'filled', 'filled', 'filled', 'filled', 'filled', 'new', 'new'], [], ['filled', 'filled']],
@@ -1162,19 +1321,19 @@ h3 { font-family: var(--font-sans); font-size: var(--font-size-xl); font-weight:
       title: 'Agentic Workflow',
       steps: [
         {
-          narration: 'An AI agent sends 3 parallel tool calls  --  all sharing the same system prompt. The first call arrives and computes the full cache on Pod 1.',
+          narration: 'An AI agent sends 3 parallel tool calls -- all sharing the same system prompt. The first call arrives and computes the full cache on Pod 1.',
           request: 'Agent Call 1: "You are a code assistant. [system prompt] Run unit tests"',
           scores: null, caches: [[], [], []], activeLines: ['req-epp', 'epp-pod1'], podStates: ['highlighted', '', '']
         },
         {
-          narration: 'Pod 1 now has the system prompt cached (4 blocks). Agent Calls 2 and 3 arrive simultaneously  --  both with the same system prompt prefix.',
+          narration: 'Pod 1 now has the system prompt cached (4 blocks). Agent Calls 2 and 3 arrive simultaneously -- both with the same system prompt prefix.',
           request: 'Agent Calls 2 & 3: same system prompt + different tool instructions',
-          scores: [4, 0, 0], scoreLabels: ['4 blocks ★', '0 blocks', '0 blocks'], scoreClasses: ['high', 'zero', 'zero'],
+          scores: [4, 0, 0], scoreLabels: ['4 blocks', '0 blocks', '0 blocks'], scoreClasses: ['high', 'zero', 'zero'],
           caches: [['S', 'S', 'S', 'S'], [], []], cacheClasses: [['match', 'match', 'match', 'match'], [], []],
           activeLines: [], podStates: ['highlighted', '', '']
         },
         {
-          narration: 'EPP routes both remaining calls to Pod 1  --  it has the highest prefix match score. Both calls skip the system prompt prefill entirely. Only the unique tool instructions need computing.',
+          narration: 'EPP routes both remaining calls to Pod 1 -- it has the highest prefix match score. Both calls skip the system prompt prefill entirely. Only the unique tool instructions need computing.',
           request: null, scores: null, routeTo: 1,
           caches: [['S', 'S', 'S', 'S'], [], []], cacheClasses: [['match', 'match', 'match', 'match'], [], []],
           activeLines: ['epp-pod1'], podStates: ['highlighted', '', '']
@@ -1194,6 +1353,7 @@ h3 { font-family: var(--font-sans); font-size: var(--font-size-xl); font-weight:
   var currentStep = 0;
   var isPlaying = false;
   var playTimer = null;
+  var hasStarted = false;
 
   var narrationEl = document.getElementById('narration');
   var stepIndicatorEl = document.getElementById('stepIndicator');
@@ -1201,6 +1361,9 @@ h3 { font-family: var(--font-sans); font-size: var(--font-size-xl); font-weight:
   var prevBtn = document.getElementById('prevStep');
   var nextBtn = document.getElementById('nextStep');
   var playPauseBtn = document.getElementById('playPause');
+  var diagramControls = document.getElementById('diagramControls');
+  var startOverlay = document.getElementById('startOverlay');
+  var startBtn = document.getElementById('startBtn');
 
   var cacheEls = [document.getElementById('cache1'), document.getElementById('cache2'), document.getElementById('cache3')];
   var podEls = [document.getElementById('pod1'), document.getElementById('pod2'), document.getElementById('pod3')];
@@ -1211,6 +1374,12 @@ h3 { font-family: var(--font-sans); font-size: var(--font-size-xl); font-weight:
     'epp-pod2': document.getElementById('line-epp-pod2'),
     'epp-pod3': document.getElementById('line-epp-pod3')
   };
+
+  function showDiagramStarted() {
+    hasStarted = true;
+    startOverlay.classList.add('hidden');
+    diagramControls.style.display = 'flex';
+  }
 
   function renderStep() {
     var scenario = SCENARIOS[currentScenario];
@@ -1264,25 +1433,36 @@ h3 { font-family: var(--font-sans); font-size: var(--font-size-xl); font-weight:
   function renderCache(el, blocks, classes) {
     var html = '';
     if (blocks.length === 0) {
-      for (var e = 0; e < 6; e++) html += '<div class="cache-block cache-block--empty"> -- </div>';
+      for (var e = 0; e < 6; e++) html += '<div class="cache-block cache-block--empty">--</div>';
     } else {
       for (var i = 0; i < blocks.length; i++) {
         var cls = (classes && classes[i]) ? classes[i] : 'filled';
         html += '<div class="cache-block cache-block--' + cls + '">' + blocks[i] + '</div>';
       }
       var remaining = 8 - blocks.length;
-      for (var r = 0; r < remaining && r < 4; r++) html += '<div class="cache-block cache-block--empty"> -- </div>';
+      for (var r = 0; r < remaining && r < 4; r++) html += '<div class="cache-block cache-block--empty">--</div>';
     }
     el.innerHTML = html;
   }
 
   function goNext() {
+    if (!hasStarted) {
+      showDiagramStarted();
+      renderStep();
+      return;
+    }
     var scenario = SCENARIOS[currentScenario];
     if (currentStep < scenario.steps.length - 1) { currentStep++; renderStep(); }
   }
   function goPrev() {
     if (currentStep > 0) { currentStep--; renderStep(); }
   }
+
+  startBtn.addEventListener('click', function () {
+    showDiagramStarted();
+    currentStep = 0;
+    renderStep();
+  });
 
   nextBtn.addEventListener('click', goNext);
   prevBtn.addEventListener('click', goPrev);
@@ -1292,18 +1472,32 @@ h3 { font-family: var(--font-sans); font-size: var(--font-size-xl); font-weight:
   document.addEventListener('keydown', function (e) {
     if (e.key === 'ArrowRight' || e.key === 'Right') { e.preventDefault(); goNext(); }
     if (e.key === 'ArrowLeft' || e.key === 'Left') { e.preventDefault(); goPrev(); }
-    if (e.key === ' ') { e.preventDefault(); isPlaying ? stopPlaying() : startPlaying(); }
+    if (e.key === ' ') {
+      e.preventDefault();
+      if (!hasStarted) {
+        showDiagramStarted();
+        currentStep = 0;
+        renderStep();
+      } else {
+        isPlaying ? stopPlaying() : startPlaying();
+      }
+    }
   });
 
   function startPlaying() {
+    if (!hasStarted) {
+      showDiagramStarted();
+      currentStep = 0;
+      renderStep();
+    }
     isPlaying = true;
-    playPauseBtn.innerHTML = '⏸ Pause';
+    playPauseBtn.textContent = 'Pause';
     playPauseBtn.classList.add('active');
     playTick();
   }
   function stopPlaying() {
     isPlaying = false;
-    playPauseBtn.innerHTML = '▶ Play';
+    playPauseBtn.textContent = 'Play';
     playPauseBtn.classList.remove('active');
     if (playTimer) { clearTimeout(playTimer); playTimer = null; }
   }
@@ -1323,7 +1517,12 @@ h3 { font-family: var(--font-sans); font-size: var(--font-size-xl); font-weight:
       currentScenario = this.dataset.scenario;
       currentStep = 0;
       stopPlaying();
-      renderStep();
+      if (hasStarted) {
+        renderStep();
+      } else {
+        // Reset narration for new scenario
+        narrationEl.textContent = 'Select a scenario above and press the button to begin. Each scenario shows a different routing pattern.';
+      }
     });
   });
 
@@ -1346,8 +1545,15 @@ h3 { font-family: var(--font-sans); font-size: var(--font-size-xl); font-weight:
     });
   }
 
-  // ── Init ──
-  renderStep();
+  // -- Render initial empty cache state for pods --
+  function initCaches() {
+    for (var p = 0; p < 3; p++) {
+      renderCache(cacheEls[p], [], null);
+    }
+  }
+
+  // -- Init --
+  initCaches();
   initComparison();
   initScrollProgress();
   initCountUp();
