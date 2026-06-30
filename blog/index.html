@@ -51,7 +51,7 @@
 
 <div class="submission-header">
   <h1>How llm-d's Prefix-Cache-Aware Routing Works</h1>
-  <div class="subtitle">Why your load balancer is secretly burning GPU cycles — and how to stop it</div>
+  <div class="subtitle">Why your load balancer is secretly burning GPU cycles  --  and how to stop it</div>
 </div>
 
 <div class="meta-card">
@@ -65,9 +65,9 @@
 <div class="article">
 <h2>The Hidden Tax on Every LLM Request</h2>
 
-<p>Every time you send a request to an LLM, the model computes a KV (key-value) cache for every token in your prompt. For a 32,000-token document, that&rsquo;s 3,700 milliseconds of GPU compute &mdash; before the model generates a single word.</p>
+<p>Every time you send a request to an LLM, the model computes a KV (key-value) cache for every token in your prompt. For a 32,000-token document, that&rsquo;s 3,700 milliseconds of GPU compute  --  before the model generates a single word.</p>
 
-<p>Now imagine 10 users asking questions about the same document. With standard round-robin load balancing, each request lands on a different pod. Each pod computes the full 32K-token KV cache from scratch. That&rsquo;s 37 seconds of redundant GPU work &mdash; for prompts that share 99% of their tokens.</p>
+<p>Now imagine 10 users asking questions about the same document. With standard round-robin load balancing, each request lands on a different pod. Each pod computes the full 32K-token KV cache from scratch. That&rsquo;s 37 seconds of redundant GPU work  --  for prompts that share 99% of their tokens.</p>
 
 <p>This is the hidden tax of round-robin routing in LLM inference.</p>
 
@@ -76,10 +76,10 @@
 <p>llm-d&rsquo;s routing algorithm solves this by tracking which KV cache segments are already computed on which pods. The Endpoint Picker Policy (EPP) maintains a real-time index of cached prefixes across all replicas. When a new request arrives, the EPP:</p>
 
 <ol>
-  <li><strong>Extracts the token prefix</strong> &mdash; the portion of the prompt that could be shared with previous requests (system prompt, document context, conversation history)</li>
-  <li><strong>Queries the prefix index</strong> &mdash; finds which pods already have matching tokens cached in GPU memory</li>
-  <li><strong>Scores each candidate pod</strong> &mdash; weighing cache match length against current load, queue depth, and available KV cache capacity</li>
-  <li><strong>Routes to the best match</strong> &mdash; the pod where the most prefill computation can be skipped</li>
+  <li><strong>Extracts the token prefix</strong>  --  the portion of the prompt that could be shared with previous requests (system prompt, document context, conversation history)</li>
+  <li><strong>Queries the prefix index</strong>  --  finds which pods already have matching tokens cached in GPU memory</li>
+  <li><strong>Scores each candidate pod</strong>  --  weighing cache match length against current load, queue depth, and available KV cache capacity</li>
+  <li><strong>Routes to the best match</strong>  --  the pod where the most prefill computation can be skipped</li>
 </ol>
 
 <p>The result: on a cache hit, the prefill phase is effectively free. The model skips straight to generating the response.</p>
@@ -93,7 +93,7 @@
 <p>An AI agent with 10 parallel tool calls shares the same system prompt and conversation context across all 10 requests. With round-robin routing: 10 cold prefills. With llm-d: 1 cold prefill + 9 cache hits.</p>
 
 <h3>Long-context document Q&amp;A</h3>
-<p>Upload a 32K-token contract and ask 20 questions about it. Each question shares the full document prefix. With cache-aware routing, questions 2&ndash;20 skip 3,700ms of prefill &mdash; each responding in under 80ms.</p>
+<p>Upload a 32K-token contract and ask 20 questions about it. Each question shares the full document prefix. With cache-aware routing, questions 2&ndash;20 skip 3,700ms of prefill  --  each responding in under 80ms.</p>
 
 <h2>The Numbers</h2>
 
@@ -103,11 +103,11 @@
   <div class="stat-box"><div class="number">4/5</div><div class="label">Cache hits on identical prompts</div></div>
 </div>
 
-<p>Benchmarked on 3x NVIDIA H200 GPUs running Llama 3.1 70B (FP8) on Red Hat OpenShift. The first request to each unique prefix is a cold miss &mdash; every subsequent request with a matching prefix is a hit.</p>
+<p>Benchmarked on 3x NVIDIA H200 GPUs running Llama 3.1 70B (FP8) on Red Hat OpenShift. The first request to each unique prefix is a cold miss  --  every subsequent request with a matching prefix is a hit.</p>
 
 <h2>What This Means for Your GPU Bill</h2>
 
-<p>Skipping prefill doesn&rsquo;t just improve latency &mdash; it frees GPU cycles. Every cache hit is compute you didn&rsquo;t burn. At scale, this translates directly to:</p>
+<p>Skipping prefill doesn&rsquo;t just improve latency  --  it frees GPU cycles. Every cache hit is compute you didn&rsquo;t burn. At scale, this translates directly to:</p>
 
 <ul>
   <li><strong>Fewer GPUs needed</strong> for the same throughput</li>
@@ -121,7 +121,7 @@
 
 <h2>How to Try It</h2>
 
-<p>llm-d is open source and deploys on any Kubernetes cluster. The <a href="https://markellr-redhat.github.io/llm-d-prefix-cache-routing/">interactive routing visualization</a> shows exactly how the EPP makes routing decisions &mdash; watch requests flow to cached pods in real time.</p>
+<p>llm-d is open source and deploys on any Kubernetes cluster. The <a href="https://markellr-redhat.github.io/llm-d-prefix-cache-routing/">interactive routing visualization</a> shows exactly how the EPP makes routing decisions  --  watch requests flow to cached pods in real time.</p>
 
 <ul>
   <li><strong>llm-d on GitHub:</strong> <a href="https://github.com/llm-d/llm-d">github.com/llm-d/llm-d</a></li>

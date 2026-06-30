@@ -674,7 +674,7 @@ h3 { font-family: var(--font-sans); font-size: var(--font-size-xl); font-weight:
       <div class="hero-label">Prefix-Cache-Aware Routing</div>
     </div>
     <p class="hero-description reveal reveal-delay-1">
-      Every LLM request starts by computing a KV cache &mdash; a matrix of attention states for every token in the prompt.
+      Every LLM request starts by computing a KV cache  --  a matrix of attention states for every token in the prompt.
       When two requests share the same prefix, that computation is identical. llm-d&rsquo;s routing algorithm detects
       these overlaps and sends requests to the pod that already has the cache, skipping redundant GPU work entirely.
     </p>
@@ -705,14 +705,14 @@ h3 { font-family: var(--font-sans); font-size: var(--font-size-xl); font-weight:
     <h2 class="reveal">The Problem with Round-Robin</h2>
     <p class="section-description reveal">
       Standard load balancers treat inference pods as interchangeable. They scatter requests across replicas
-      with no awareness of what&rsquo;s cached where &mdash; forcing every pod to recompute KV caches from scratch.
+      with no awareness of what&rsquo;s cached where  --  forcing every pod to recompute KV caches from scratch.
     </p>
     <div class="problem-grid">
       <div class="problem-card problem-card--bad reveal reveal-delay-1">
         <h3>Round-Robin Routing</h3>
         <p>
-          Request 1 goes to Pod A, which computes the full KV cache. Request 2 &mdash; with the exact same system
-          prompt &mdash; goes to Pod B, which has to compute it all over again. The cache sitting in Pod A is wasted.
+          Request 1 goes to Pod A, which computes the full KV cache. Request 2  --  with the exact same system
+          prompt  --  goes to Pod B, which has to compute it all over again. The cache sitting in Pod A is wasted.
           Multiply this across every request, and you&rsquo;re burning GPU cycles recomputing attention states that
           already exist somewhere in your fleet.
         </p>
@@ -721,7 +721,7 @@ h3 { font-family: var(--font-sans); font-size: var(--font-size-xl); font-weight:
         <h3>Cache-Aware Routing</h3>
         <p>
           The EPP (Endpoint Picker Policy) knows what each pod has cached. When Request 2 arrives with the
-          same prefix, the EPP routes it to Pod A &mdash; the pod that already has the cache. Pod A skips the entire
+          same prefix, the EPP routes it to Pod A  --  the pod that already has the cache. Pod A skips the entire
           prefill phase and goes straight to generating tokens. Zero redundant compute. The longer the shared
           prefix, the bigger the savings.
         </p>
@@ -801,7 +801,7 @@ h3 { font-family: var(--font-sans); font-size: var(--font-size-xl); font-weight:
       <div class="step-card reveal reveal-delay-1">
         <div class="step-number">1</div>
         <h3>Request Arrives</h3>
-        <p>A chat completion request hits the Gateway API. The EPP intercepts it and extracts the token prefix &mdash; the sequence of tokens that make up the prompt (system message + conversation history).</p>
+        <p>A chat completion request hits the Gateway API. The EPP intercepts it and extracts the token prefix  --  the sequence of tokens that make up the prompt (system message + conversation history).</p>
       </div>
       <div class="step-card reveal reveal-delay-2">
         <div class="step-number">2</div>
@@ -811,12 +811,12 @@ h3 { font-family: var(--font-sans); font-size: var(--font-size-xl); font-weight:
       <div class="step-card reveal reveal-delay-3">
         <div class="step-number">3</div>
         <h3>Score by Overlap</h3>
-        <p>Each pod gets a score based on the longest prefix match &mdash; how many contiguous token blocks from the start of the request are already in that pod&rsquo;s KV cache. More blocks matched = higher score.</p>
+        <p>Each pod gets a score based on the longest prefix match  --  how many contiguous token blocks from the start of the request are already in that pod&rsquo;s KV cache. More blocks matched = higher score.</p>
       </div>
       <div class="step-card reveal reveal-delay-4">
         <div class="step-number">4</div>
         <h3>Route to Best Match</h3>
-        <p>The request is routed to the highest-scoring pod. On a full cache hit, the pod skips the entire prefill phase &mdash; it already has the attention states computed and goes straight to generating new tokens.</p>
+        <p>The request is routed to the highest-scoring pod. On a full cache hit, the pod skips the entire prefill phase  --  it already has the attention states computed and goes straight to generating new tokens.</p>
       </div>
     </div>
   </div>
@@ -837,7 +837,7 @@ h3 { font-family: var(--font-sans); font-size: var(--font-size-xl); font-weight:
         <h3>Multi-Turn Conversations</h3>
         <p>
           Each turn in a conversation builds on the previous one. Turn 3&rsquo;s prompt contains all of turns 1 and 2
-          as prefix. Routing to the same pod means turns 1&ndash;2 are already cached &mdash; only the new user message
+          as prefix. Routing to the same pod means turns 1&ndash;2 are already cached  --  only the new user message
           needs prefilling.
         </p>
         <div class="scenario-benefit">Turn N reuses 100% of turns 1 through N-1</div>
@@ -858,7 +858,7 @@ h3 { font-family: var(--font-sans); font-size: var(--font-size-xl); font-weight:
         <p>
           When users ask multiple questions about the same document, the document tokens are identical across
           requests. A 32K-token document cached on Pod A means every follow-up question skips 32K tokens of
-          prefill computation &mdash; that&rsquo;s where the 47.5x speedup comes from.
+          prefill computation  --  that&rsquo;s where the 47.5x speedup comes from.
         </p>
         <div class="scenario-benefit">32K cached tokens = 3,700ms &rarr; 79ms TTFT</div>
       </div>
@@ -877,12 +877,12 @@ h3 { font-family: var(--font-sans); font-size: var(--font-size-xl); font-weight:
     </p>
     <div class="problem-grid reveal">
       <div class="problem-card problem-card--good">
-        <h3>Not time-based &mdash; memory-based</h3>
+        <h3>Not time-based  --  memory-based</h3>
         <p>
           vLLM uses LRU (least recently used) eviction. When GPU memory fills up with cached blocks
           from many different prompts, the blocks that haven&rsquo;t been accessed in the longest time
           get evicted first. Under low traffic with consistent system prompts, cached blocks can
-          persist indefinitely &mdash; hours, days, as long as the pod is running.
+          persist indefinitely  --  hours, days, as long as the pod is running.
         </p>
       </div>
       <div class="problem-card problem-card--bad">
@@ -900,7 +900,7 @@ h3 { font-family: var(--font-sans); font-size: var(--font-size-xl); font-weight:
         <strong style="color: var(--color-text);">Why this matters for routing:</strong>
         Cache-aware routing compounds the benefit. By concentrating requests with the same prefix
         onto the same pod, llm-d keeps that pod&rsquo;s cache hot for exactly the tokens that matter.
-        The more consistent your prompt patterns, the higher your cache hit rate &mdash; and the
+        The more consistent your prompt patterns, the higher your cache hit rate  --  and the
         longer those blocks persist in GPU memory without eviction.
       </p>
     </div>
@@ -959,13 +959,13 @@ h3 { font-family: var(--font-sans); font-size: var(--font-size-xl); font-weight:
   <div class="container">
     <h2 class="reveal">Common Questions</h2>
     <p class="section-description reveal">
-      The questions people ask most about prefix-cache-aware routing &mdash;
+      The questions people ask most about prefix-cache-aware routing  -- 
       from conference halls to Slack channels.
     </p>
     <div class="faq-grid">
       <div class="faq-item reveal reveal-delay-1">
         <h3>Can the cache be shared across pods?</h3>
-        <p>No. The KV cache lives in each pod&rsquo;s GPU memory &mdash; Pod A cannot read blocks from Pod B&rsquo;s GPU. This is exactly why routing matters: if you can&rsquo;t share the cache, send the request to the pod that already has it.</p>
+        <p>No. The KV cache lives in each pod&rsquo;s GPU memory  --  Pod A cannot read blocks from Pod B&rsquo;s GPU. This is exactly why routing matters: if you can&rsquo;t share the cache, send the request to the pod that already has it.</p>
       </div>
       <div class="faq-item reveal reveal-delay-2">
         <h3>What happens when a pod restarts?</h3>
@@ -973,11 +973,11 @@ h3 { font-family: var(--font-sans); font-size: var(--font-size-xl); font-weight:
       </div>
       <div class="faq-item reveal reveal-delay-1">
         <h3>Does this add latency?</h3>
-        <p>The EPP scoring adds microseconds &mdash; it&rsquo;s a hash comparison across a small set of pods. The routing cost is invisible. The savings from skipping prefill (hundreds of ms to seconds) are not.</p>
+        <p>The EPP scoring adds microseconds  --  it&rsquo;s a hash comparison across a small set of pods. The routing cost is invisible. The savings from skipping prefill (hundreds of ms to seconds) are not.</p>
       </div>
       <div class="faq-item reveal reveal-delay-2">
         <h3>Does it work with any model?</h3>
-        <p>Any model served by vLLM with automatic prefix caching enabled (the default). Llama, Mistral, Qwen, Falcon &mdash; any transformer. The cache operates at the KV block level, a property of attention, not specific model weights.</p>
+        <p>Any model served by vLLM with automatic prefix caching enabled (the default). Llama, Mistral, Qwen, Falcon  --  any transformer. The cache operates at the KV block level, a property of attention, not specific model weights.</p>
       </div>
       <div class="faq-item reveal reveal-delay-1">
         <h3>What&rsquo;s the minimum prefix length?</h3>
@@ -989,7 +989,7 @@ h3 { font-family: var(--font-sans); font-size: var(--font-size-xl); font-weight:
       </div>
       <div class="faq-item reveal reveal-delay-1">
         <h3>What if all pods are cold?</h3>
-        <p>The EPP falls back to load-based routing &mdash; fewest active requests wins. That first request computes the cache, and all subsequent requests with the same prefix benefit from it.</p>
+        <p>The EPP falls back to load-based routing  --  fewest active requests wins. That first request computes the cache, and all subsequent requests with the same prefix benefit from it.</p>
       </div>
       <div class="faq-item reveal reveal-delay-2">
         <h3>Does it work with LoRA adapters?</h3>
@@ -997,11 +997,11 @@ h3 { font-family: var(--font-sans); font-size: var(--font-size-xl); font-weight:
       </div>
       <div class="faq-item reveal reveal-delay-1">
         <h3>How much GPU memory does the cache use?</h3>
-        <p>vLLM uses whatever GPU memory isn&rsquo;t active for inference &mdash; no separate allocation or config. On an H200 with 141GB serving a 70B model in FP8 (~70GB), there&rsquo;s substantial room for cached blocks. vLLM manages this automatically.</p>
+        <p>vLLM uses whatever GPU memory isn&rsquo;t active for inference  --  no separate allocation or config. On an H200 with 141GB serving a 70B model in FP8 (~70GB), there&rsquo;s substantial room for cached blocks. vLLM manages this automatically.</p>
       </div>
       <div class="faq-item reveal reveal-delay-2">
         <h3>Do I need to change my application code?</h3>
-        <p>No. Cache-aware routing is a routing-layer optimization. Your prompts, model, and application stay the same. Swap in llm-d as your inference gateway and cache reuse happens automatically &mdash; no SDK changes, no prompt modifications.</p>
+        <p>No. Cache-aware routing is a routing-layer optimization. Your prompts, model, and application stay the same. Swap in llm-d as your inference gateway and cache reuse happens automatically  --  no SDK changes, no prompt modifications.</p>
       </div>
     </div>
   </div>
@@ -1025,7 +1025,7 @@ h3 { font-family: var(--font-sans); font-size: var(--font-size-xl); font-weight:
 (function () {
   'use strict';
 
-  // ── No JS-dependent reveal system — pure CSS animations handle entrance ──
+  // ── No JS-dependent reveal system  --  pure CSS animations handle entrance ──
 
   // ── Scroll progress bar ──
   function initScrollProgress() {
@@ -1075,17 +1075,17 @@ h3 { font-family: var(--font-sans); font-size: var(--font-size-xl); font-weight:
       steps: [
         {
           narration: 'A user sends their first chat request. The EPP receives the request and checks all pods for cached prefix blocks.',
-          request: 'POST /v1/chat — "You are a helpful assistant. What is Kubernetes?"',
+          request: 'POST /v1/chat  --  "You are a helpful assistant. What is Kubernetes?"',
           scores: [0, 0, 0], scoreLabels: ['0 blocks', '0 blocks', '0 blocks'], scoreClasses: ['zero', 'zero', 'zero'],
           routeTo: null, caches: [[], [], []], activeLines: ['req-epp'], podStates: ['', '', '']
         },
         {
-          narration: 'No pod has any cached blocks — all scores are zero. The EPP picks Pod 1 (lowest load). This will be a cold start — full prefill computation required.',
+          narration: 'No pod has any cached blocks  --  all scores are zero. The EPP picks Pod 1 (lowest load). This will be a cold start  --  full prefill computation required.',
           request: null, scores: [0, 0, 0], scoreLabels: ['0 blocks', '0 blocks', '0 blocks'], scoreClasses: ['zero', 'zero', 'zero'],
           routeTo: null, caches: [[], [], []], activeLines: [], podStates: ['', '', '']
         },
         {
-          narration: 'The EPP routes the request to Pod 1. Pod 1 computes the full KV cache from scratch — system prompt + user message. This takes ~3,700ms at 32K tokens.',
+          narration: 'The EPP routes the request to Pod 1. Pod 1 computes the full KV cache from scratch  --  system prompt + user message. This takes ~3,700ms at 32K tokens.',
           request: null, scores: null, routeTo: 1, caches: [[], [], []], activeLines: ['epp-pod1'], podStates: ['highlighted', '', '']
         },
         {
@@ -1101,7 +1101,7 @@ h3 { font-family: var(--font-sans); font-size: var(--font-size-xl); font-weight:
       steps: [
         {
           narration: 'Pod 1 has cached blocks from the previous request (system prompt). A new request arrives with the same system prompt but a different user question.',
-          request: 'POST /v1/chat — "You are a helpful assistant. Explain containers."',
+          request: 'POST /v1/chat  --  "You are a helpful assistant. Explain containers."',
           scores: null, caches: [['S', 'S', 'S', 'S'], [], []], cacheClasses: [['filled', 'filled', 'filled', 'filled'], [], []],
           activeLines: ['req-epp'], podStates: ['', '', '']
         },
@@ -1112,13 +1112,13 @@ h3 { font-family: var(--font-sans); font-size: var(--font-size-xl); font-weight:
           activeLines: [], podStates: ['highlighted', '', '']
         },
         {
-          narration: 'The EPP routes to Pod 1 — the only pod with a cache match. Pod 1 skips the system prompt prefill entirely and only computes the new user message tokens.',
+          narration: 'The EPP routes to Pod 1  --  the only pod with a cache match. Pod 1 skips the system prompt prefill entirely and only computes the new user message tokens.',
           request: null, scores: null, routeTo: 1,
           caches: [['S', 'S', 'S', 'S'], [], []], cacheClasses: [['match', 'match', 'match', 'match'], [], []],
           activeLines: ['epp-pod1'], podStates: ['highlighted', '', '']
         },
         {
-          narration: 'Cache hit! Pod 1 reused 4 blocks of cached computation. Only the new user question needed prefilling — a fraction of the total work. TTFT drops from seconds to milliseconds.',
+          narration: 'Cache hit! Pod 1 reused 4 blocks of cached computation. Only the new user question needed prefilling  --  a fraction of the total work. TTFT drops from seconds to milliseconds.',
           request: null, scores: null, routeTo: null,
           caches: [['S', 'S', 'S', 'S', 'U'], [], []], cacheClasses: [['filled', 'filled', 'filled', 'filled', 'new'], [], []],
           activeLines: [], podStates: ['highlighted', '', '']
@@ -1129,7 +1129,7 @@ h3 { font-family: var(--font-sans); font-size: var(--font-size-xl); font-weight:
       title: 'Multi-Turn Conversation',
       steps: [
         {
-          narration: 'Turn 1 completed on Pod 1: system prompt + first Q&A are cached (6 blocks). Now the user sends Turn 2 — the prompt includes all of Turn 1 as prefix.',
+          narration: 'Turn 1 completed on Pod 1: system prompt + first Q&A are cached (6 blocks). Now the user sends Turn 2  --  the prompt includes all of Turn 1 as prefix.',
           request: 'Turn 2: "You are a helpful assistant. [Turn 1 Q&A] Follow-up question..."',
           scores: null, caches: [['S', 'S', 'Q', 'A', 'Q', 'A'], [], ['S', 'S']],
           cacheClasses: [['filled', 'filled', 'filled', 'filled', 'filled', 'filled'], [], ['filled', 'filled']],
@@ -1143,14 +1143,14 @@ h3 { font-family: var(--font-sans); font-size: var(--font-size-xl); font-weight:
           activeLines: [], podStates: ['highlighted', '', '']
         },
         {
-          narration: 'Routed to Pod 1. It skips all 6 cached blocks and only prefills the new Turn 2 question. Each additional turn compounds the savings — more cached prefix = less new compute.',
+          narration: 'Routed to Pod 1. It skips all 6 cached blocks and only prefills the new Turn 2 question. Each additional turn compounds the savings  --  more cached prefix = less new compute.',
           request: null, scores: null, routeTo: 1,
           caches: [['S', 'S', 'Q', 'A', 'Q', 'A'], [], ['S', 'S']],
           cacheClasses: [['match', 'match', 'match', 'match', 'match', 'match'], [], ['filled', 'filled']],
           activeLines: ['epp-pod1'], podStates: ['highlighted', '', '']
         },
         {
-          narration: 'Turn 2 done. Pod 1 now has 8 blocks cached — the entire conversation history. Turn 3 will reuse all 8 blocks. Each turn gets faster as the cached prefix grows longer.',
+          narration: 'Turn 2 done. Pod 1 now has 8 blocks cached  --  the entire conversation history. Turn 3 will reuse all 8 blocks. Each turn gets faster as the cached prefix grows longer.',
           request: null, scores: null, routeTo: null,
           caches: [['S', 'S', 'Q', 'A', 'Q', 'A', 'Q', 'A'], [], ['S', 'S']],
           cacheClasses: [['filled', 'filled', 'filled', 'filled', 'filled', 'filled', 'new', 'new'], [], ['filled', 'filled']],
@@ -1162,19 +1162,19 @@ h3 { font-family: var(--font-sans); font-size: var(--font-size-xl); font-weight:
       title: 'Agentic Workflow',
       steps: [
         {
-          narration: 'An AI agent sends 3 parallel tool calls — all sharing the same system prompt. The first call arrives and computes the full cache on Pod 1.',
+          narration: 'An AI agent sends 3 parallel tool calls  --  all sharing the same system prompt. The first call arrives and computes the full cache on Pod 1.',
           request: 'Agent Call 1: "You are a code assistant. [system prompt] Run unit tests"',
           scores: null, caches: [[], [], []], activeLines: ['req-epp', 'epp-pod1'], podStates: ['highlighted', '', '']
         },
         {
-          narration: 'Pod 1 now has the system prompt cached (4 blocks). Agent Calls 2 and 3 arrive simultaneously — both with the same system prompt prefix.',
+          narration: 'Pod 1 now has the system prompt cached (4 blocks). Agent Calls 2 and 3 arrive simultaneously  --  both with the same system prompt prefix.',
           request: 'Agent Calls 2 & 3: same system prompt + different tool instructions',
           scores: [4, 0, 0], scoreLabels: ['4 blocks ★', '0 blocks', '0 blocks'], scoreClasses: ['high', 'zero', 'zero'],
           caches: [['S', 'S', 'S', 'S'], [], []], cacheClasses: [['match', 'match', 'match', 'match'], [], []],
           activeLines: [], podStates: ['highlighted', '', '']
         },
         {
-          narration: 'EPP routes both remaining calls to Pod 1 — it has the highest prefix match score. Both calls skip the system prompt prefill entirely. Only the unique tool instructions need computing.',
+          narration: 'EPP routes both remaining calls to Pod 1  --  it has the highest prefix match score. Both calls skip the system prompt prefill entirely. Only the unique tool instructions need computing.',
           request: null, scores: null, routeTo: 1,
           caches: [['S', 'S', 'S', 'S'], [], []], cacheClasses: [['match', 'match', 'match', 'match'], [], []],
           activeLines: ['epp-pod1'], podStates: ['highlighted', '', '']
@@ -1264,14 +1264,14 @@ h3 { font-family: var(--font-sans); font-size: var(--font-size-xl); font-weight:
   function renderCache(el, blocks, classes) {
     var html = '';
     if (blocks.length === 0) {
-      for (var e = 0; e < 6; e++) html += '<div class="cache-block cache-block--empty">—</div>';
+      for (var e = 0; e < 6; e++) html += '<div class="cache-block cache-block--empty"> -- </div>';
     } else {
       for (var i = 0; i < blocks.length; i++) {
         var cls = (classes && classes[i]) ? classes[i] : 'filled';
         html += '<div class="cache-block cache-block--' + cls + '">' + blocks[i] + '</div>';
       }
       var remaining = 8 - blocks.length;
-      for (var r = 0; r < remaining && r < 4; r++) html += '<div class="cache-block cache-block--empty">—</div>';
+      for (var r = 0; r < remaining && r < 4; r++) html += '<div class="cache-block cache-block--empty"> -- </div>';
     }
     el.innerHTML = html;
   }
