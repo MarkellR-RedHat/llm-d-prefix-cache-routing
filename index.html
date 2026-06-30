@@ -4,1559 +4,1825 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>How llm-d's Prefix-Cache-Aware Routing Works</title>
+  <meta name="author" content="Markell Rawls">
+  <link rel="icon" type="image/png" href="https://llm-d.ai/img/llm-d-icon.png">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Lora:ital,wght@0,400;0,500;0,600;0,700;1,400;1,500&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Red+Hat+Display:wght@400;500;600;700;800;900&family=Red+Hat+Text:wght@400;500;600;700&display=swap" rel="stylesheet">
   <style>
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
 :root {
-  --color-bg: #faf9f7;
-  --color-surface: #fffefa;
-  --color-surface-warm: #fdf8f3;
-  --color-border: #e8e2da;
-  --color-border-light: #f0ebe4;
-  --color-text: #2d2a26;
-  --color-text-secondary: #5c5750;
-  --color-text-muted: #8a8279;
-  --color-link: #6b5b3e;
-  --color-hit: #3d7a4a;
-  --color-hit-bright: #5ea86d;
-  --color-miss: #c45a4a;
-  --color-miss-soft: #e8a090;
-  --color-route: #5a7fb5;
-  --color-epp: #7b5ea7;
-  --color-epp-warm: #9474c2;
-  --color-accent: #c49a6c;
-  --color-accent-light: #e8d5bc;
-  --color-chapter: #6b5b3e;
-  --space-xs: 0.25rem;
-  --space-sm: 0.5rem;
-  --space-md: 1rem;
-  --space-lg: 1.5rem;
-  --space-xl: 2rem;
-  --space-2xl: 3rem;
-  --space-3xl: 4rem;
-  --space-4xl: 6rem;
-  --font-serif: 'Lora', Georgia, 'Times New Roman', serif;
-  --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --bg: #faf8f5;
+  --card: #ffffff;
+  --text: #2d2a26;
+  --text-secondary: #5c5750;
+  --text-muted: #8a8279;
+  --border: #e8e2da;
+  --amber: #d4910a;
+  --amber-light: #fef3cd;
+  --amber-glow: rgba(212, 145, 10, 0.15);
+  --coral: #e05a3a;
+  --coral-light: #fde8e3;
+  --coral-glow: rgba(224, 90, 58, 0.15);
+  --blue: #3a7bd5;
+  --blue-light: #dce8f8;
+  --blue-glow: rgba(58, 123, 213, 0.15);
+  --green: #2e8b57;
+  --green-light: #d4edda;
+  --green-glow: rgba(46, 139, 87, 0.15);
+  --purple: #7b5ea7;
+  --purple-light: #ede4f7;
+  --purple-glow: rgba(123, 94, 167, 0.15);
+  --font-display: 'Red Hat Display', -apple-system, BlinkMacSystemFont, sans-serif;
+  --font-text: 'Red Hat Text', -apple-system, BlinkMacSystemFont, sans-serif;
   --font-mono: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
-  --font-size-sm: 0.875rem;
-  --font-size-base: 1rem;
-  --font-size-lg: 1.125rem;
-  --font-size-xl: 1.25rem;
-  --font-size-2xl: 1.5rem;
-  --font-size-3xl: 2rem;
-  --font-size-hero: 3.5rem;
-  --radius-sm: 6px;
-  --radius-md: 10px;
-  --radius-lg: 16px;
-  --radius-xl: 24px;
-  --transition-fast: 150ms ease;
-  --transition-base: 300ms ease;
 }
 
-html { scroll-behavior: smooth; }
-
-body {
-  font-family: var(--font-sans);
-  font-size: var(--font-size-base);
-  line-height: 1.7;
-  color: var(--color-text);
-  background-color: var(--color-bg);
+html, body {
+  overflow: hidden;
+  width: 100%;
+  height: 100%;
+  background: var(--bg);
+  font-family: var(--font-text);
+  color: var(--text);
   -webkit-font-smoothing: antialiased;
-  overflow-x: hidden;
+  -moz-osx-font-smoothing: grayscale;
 }
 
-a { color: var(--color-link); text-decoration: none; transition: color var(--transition-fast); }
-a:hover { text-decoration: underline; color: var(--color-epp); }
-code { font-family: var(--font-mono); font-size: 0.88em; background: #f0ebe4; padding: 0.15em 0.4em; border-radius: var(--radius-sm); }
-
-.container { max-width: 1100px; margin: 0 auto; padding: 0 var(--space-xl); }
-
-/* --- Floating gradient blobs --- */
-.blob-canvas {
-  position: fixed; top: 0; left: 0; width: 100%; height: 100%;
-  pointer-events: none; z-index: 0; overflow: hidden;
-}
-.blob {
-  position: absolute; border-radius: 50%; filter: blur(100px); opacity: 0.25;
-  will-change: transform;
-}
-.blob--peach {
-  width: 500px; height: 500px;
-  background: radial-gradient(circle, rgba(212, 163, 115, 0.5) 0%, transparent 70%);
-  top: -100px; right: -100px;
-  animation: blobDrift1 20s ease-in-out infinite;
-}
-.blob--lavender {
-  width: 450px; height: 450px;
-  background: radial-gradient(circle, rgba(150, 120, 200, 0.35) 0%, transparent 70%);
-  top: 40%; left: -120px;
-  animation: blobDrift2 25s ease-in-out infinite;
-}
-.blob--sage {
-  width: 400px; height: 400px;
-  background: radial-gradient(circle, rgba(120, 180, 130, 0.3) 0%, transparent 70%);
-  bottom: 10%; right: -80px;
-  animation: blobDrift3 22s ease-in-out infinite;
-}
-.blob--gold {
-  width: 350px; height: 350px;
-  background: radial-gradient(circle, rgba(210, 180, 120, 0.3) 0%, transparent 70%);
-  top: 60%; left: 40%;
-  animation: blobDrift4 28s ease-in-out infinite;
-}
-
-@keyframes blobDrift1 {
-  0%, 100% { transform: translate(0, 0) scale(1); }
-  25% { transform: translate(-40px, 50px) scale(1.08); }
-  50% { transform: translate(30px, -20px) scale(0.95); }
-  75% { transform: translate(-20px, 30px) scale(1.05); }
-}
-@keyframes blobDrift2 {
-  0%, 100% { transform: translate(0, 0) scale(1); }
-  33% { transform: translate(60px, -30px) scale(1.1); }
-  66% { transform: translate(-30px, 40px) scale(0.92); }
-}
-@keyframes blobDrift3 {
-  0%, 100% { transform: translate(0, 0) scale(1); }
-  30% { transform: translate(-50px, -40px) scale(1.06); }
-  60% { transform: translate(40px, 20px) scale(0.97); }
-}
-@keyframes blobDrift4 {
-  0%, 100% { transform: translate(0, 0) scale(1); }
-  40% { transform: translate(30px, -50px) scale(1.04); }
-  70% { transform: translate(-40px, 30px) scale(0.96); }
-}
-
-/* --- Scroll Progress --- */
-.scroll-progress {
-  position: fixed; top: 0; left: 0; height: 3px;
-  background: linear-gradient(90deg, var(--color-accent), var(--color-epp-warm), var(--color-hit-bright));
-  z-index: 200; transition: width 50ms linear; border-radius: 0 2px 2px 0;
-}
-
-/* --- Entrance animations --- */
-@keyframes fadeInUp {
-  from { opacity: 0; transform: translateY(28px); }
-  to { opacity: 1; transform: translateY(0); }
-}
-.reveal { animation: fadeInUp 0.7s cubic-bezier(0.4, 0, 0.2, 1) both; }
-.reveal-delay-1 { animation-delay: 0.1s; }
-.reveal-delay-2 { animation-delay: 0.2s; }
-.reveal-delay-3 { animation-delay: 0.3s; }
-.reveal-delay-4 { animation-delay: 0.4s; }
-
-/* --- Header --- */
-.site-header {
-  position: sticky; top: 0; z-index: 100;
-  background: rgba(250, 249, 247, 0.88);
-  backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px);
-  border-bottom: 1px solid var(--color-border-light);
-  padding: var(--space-md) 0;
-}
-.header-content { display: flex; align-items: center; justify-content: space-between; gap: var(--space-lg); }
-.header-text h1 { font-family: var(--font-serif); font-size: var(--font-size-xl); font-weight: 600; letter-spacing: -0.01em; color: var(--color-text); }
-.header-text .subtitle { font-size: var(--font-size-sm); color: var(--color-text-muted); margin-top: 2px; font-family: var(--font-sans); }
-.header-links { display: flex; gap: var(--space-sm); }
-
-/* --- Buttons --- */
-.btn {
-  display: inline-flex; align-items: center; gap: var(--space-sm);
-  padding: 0.55rem 1.2rem;
-  font-family: var(--font-sans); font-size: var(--font-size-sm); font-weight: 600;
-  border-radius: var(--radius-md); border: 1.5px solid transparent;
-  cursor: pointer; text-decoration: none; transition: all var(--transition-base); white-space: nowrap;
-}
-.btn:hover { text-decoration: none; transform: translateY(-1px); }
-.btn-primary {
-  background: var(--color-epp); color: #fff; border-color: var(--color-epp);
-  box-shadow: 0 2px 8px rgba(123, 94, 167, 0.25);
-}
-.btn-primary:hover { background: var(--color-epp-warm); border-color: var(--color-epp-warm); box-shadow: 0 4px 16px rgba(123, 94, 167, 0.35); }
-.btn-outline {
-  background: var(--color-surface); color: var(--color-text); border-color: var(--color-border);
-  box-shadow: 0 1px 3px rgba(0,0,0,0.04);
-}
-.btn-outline:hover { border-color: var(--color-text-muted); box-shadow: 0 4px 12px rgba(0,0,0,0.08); }
-
-/* --- Chapter markers --- */
-.chapter {
-  padding: var(--space-4xl) 0 var(--space-3xl);
-  position: relative;
-  z-index: 1;
-}
-.chapter-marker {
-  text-align: center;
-  margin-bottom: var(--space-3xl);
-}
-.chapter-number {
-  font-family: var(--font-serif);
-  font-size: var(--font-size-sm);
-  font-weight: 400;
-  font-style: italic;
-  color: var(--color-accent);
-  text-transform: uppercase;
-  letter-spacing: 0.15em;
-  margin-bottom: var(--space-sm);
-}
-.chapter-title {
-  font-family: var(--font-serif);
-  font-size: var(--font-size-3xl);
-  font-weight: 700;
-  color: var(--color-text);
-  letter-spacing: -0.02em;
-  line-height: 1.3;
-}
-.chapter-title::after {
-  content: '';
-  display: block;
-  width: 60px;
-  height: 2px;
-  background: linear-gradient(90deg, var(--color-accent), var(--color-accent-light));
-  margin: var(--space-lg) auto 0;
-  border-radius: 2px;
-}
-.chapter-intro {
-  max-width: 720px;
-  margin: 0 auto;
-  text-align: center;
-  font-family: var(--font-serif);
-  font-size: var(--font-size-lg);
-  font-style: italic;
-  color: var(--color-text-secondary);
-  line-height: 1.9;
-}
-
-/* --- Chapter divider --- */
-.chapter-divider {
-  text-align: center;
-  padding: var(--space-2xl) 0;
-  position: relative;
-  z-index: 1;
-}
-.chapter-divider::before {
-  content: '';
-  display: block;
-  width: 120px;
-  height: 1px;
-  background: linear-gradient(90deg, transparent, var(--color-border), var(--color-accent), var(--color-border), transparent);
-  margin: 0 auto;
-}
-
-/* --- Hero / Opening --- */
-.hero {
-  padding: 5rem 0 3rem;
-  text-align: center;
-  position: relative;
-  z-index: 1;
+/* =========================================
+   FLOATING GRADIENT BACKGROUND
+   ========================================= */
+.bg-gradient {
+  position: fixed;
+  top: 0; left: 0; width: 100vw; height: 100vh;
+  pointer-events: none; z-index: 0;
   overflow: hidden;
 }
-.hero-headline {
-  display: flex; flex-direction: column; align-items: center; gap: var(--space-sm);
-  margin-bottom: var(--space-xl);
+.bg-blob {
+  position: absolute;
+  border-radius: 50%;
+  filter: blur(120px);
+  opacity: 0.2;
+  will-change: transform;
 }
-.hero-number {
-  font-family: var(--font-serif); font-size: var(--font-size-hero); font-weight: 700;
-  letter-spacing: -0.03em;
-  background: linear-gradient(135deg, var(--color-epp) 0%, var(--color-accent) 50%, var(--color-hit) 100%);
-  background-size: 200% 200%;
-  -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text;
+.bg-blob--amber {
+  width: 600px; height: 600px;
+  background: radial-gradient(circle, rgba(212, 145, 10, 0.5), transparent 70%);
+  top: -150px; right: -100px;
+  animation: blobFloat1 22s ease-in-out infinite;
+}
+.bg-blob--coral {
+  width: 500px; height: 500px;
+  background: radial-gradient(circle, rgba(224, 90, 58, 0.35), transparent 70%);
+  bottom: -100px; left: -150px;
+  animation: blobFloat2 28s ease-in-out infinite;
+}
+.bg-blob--blue {
+  width: 450px; height: 450px;
+  background: radial-gradient(circle, rgba(58, 123, 213, 0.3), transparent 70%);
+  top: 40%; right: 30%;
+  animation: blobFloat3 25s ease-in-out infinite;
+}
+.bg-blob--green {
+  width: 400px; height: 400px;
+  background: radial-gradient(circle, rgba(46, 139, 87, 0.25), transparent 70%);
+  bottom: 20%; right: -80px;
+  animation: blobFloat4 30s ease-in-out infinite;
+}
+
+@keyframes blobFloat1 {
+  0%, 100% { transform: translate(0, 0) scale(1); }
+  33% { transform: translate(-60px, 80px) scale(1.1); }
+  66% { transform: translate(40px, -40px) scale(0.9); }
+}
+@keyframes blobFloat2 {
+  0%, 100% { transform: translate(0, 0) scale(1); }
+  33% { transform: translate(80px, -60px) scale(1.15); }
+  66% { transform: translate(-50px, 40px) scale(0.88); }
+}
+@keyframes blobFloat3 {
+  0%, 100% { transform: translate(0, 0) scale(1); }
+  50% { transform: translate(-70px, -50px) scale(1.08); }
+}
+@keyframes blobFloat4 {
+  0%, 100% { transform: translate(0, 0) scale(1); }
+  40% { transform: translate(50px, -70px) scale(1.05); }
+  70% { transform: translate(-40px, 30px) scale(0.95); }
+}
+
+/* =========================================
+   PROGRESS BAR
+   ========================================= */
+.progress-bar {
+  position: fixed;
+  top: 0; left: 0;
+  height: 4px;
+  background: linear-gradient(90deg, var(--amber), var(--coral), var(--blue), var(--green));
+  background-size: 300% 100%;
+  animation: progressGradient 4s ease-in-out infinite;
+  z-index: 1000;
+  transition: width 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+  border-radius: 0 2px 2px 0;
+}
+@keyframes progressGradient {
+  0%, 100% { background-position: 0% 50%; }
+  50% { background-position: 100% 50%; }
+}
+
+/* =========================================
+   SLIDE VIEWPORT + TRACK
+   ========================================= */
+.slides-viewport {
+  position: relative;
+  width: 100%;
+  height: 100vh;
+  overflow: hidden;
+  z-index: 1;
+}
+
+.slides-track {
+  display: flex;
+  height: 100%;
+  transition: transform 0.7s cubic-bezier(0.4, 0, 0.2, 1);
+  will-change: transform;
+}
+
+.slide {
+  flex: 0 0 100%;
+  width: 100%;
+  height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+  overflow: hidden;
+  padding: 60px 80px;
+}
+
+.slide-inner {
+  width: 100%;
+  max-width: 1200px;
+  position: relative;
+  z-index: 2;
+}
+
+/* =========================================
+   NAVIGATION
+   ========================================= */
+.nav-arrows {
+  position: fixed;
+  bottom: 40px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 24px;
+  z-index: 500;
+}
+
+.nav-arrow {
+  width: 48px; height: 48px;
+  border-radius: 50%;
+  border: 2px solid var(--border);
+  background: var(--card);
+  color: var(--text);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: all 0.3s ease;
+  box-shadow: 0 2px 12px rgba(0,0,0,0.06);
+  font-size: 18px;
+}
+.nav-arrow:hover {
+  border-color: var(--amber);
+  box-shadow: 0 4px 20px var(--amber-glow);
+  transform: scale(1.08);
+}
+.nav-arrow:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+  transform: none;
+}
+.nav-arrow:disabled:hover {
+  border-color: var(--border);
+  box-shadow: 0 2px 12px rgba(0,0,0,0.06);
+}
+
+.nav-dots {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+
+.nav-dot {
+  width: 10px; height: 10px;
+  border-radius: 50%;
+  border: none;
+  background: var(--border);
+  cursor: pointer;
+  transition: all 0.3s ease;
+  padding: 0;
+}
+.nav-dot.active {
+  background: var(--amber);
+  width: 28px;
+  border-radius: 5px;
+  box-shadow: 0 0 12px var(--amber-glow);
+}
+
+.slide-counter {
+  position: fixed;
+  bottom: 44px;
+  right: 40px;
+  font-family: var(--font-display);
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-muted);
+  z-index: 500;
+  letter-spacing: 0.05em;
+}
+
+.keyboard-hint {
+  position: fixed;
+  bottom: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 12px;
+  color: var(--text-muted);
+  z-index: 500;
+  opacity: 0.6;
+}
+.keyboard-hint kbd {
+  display: inline-block;
+  padding: 1px 6px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--card);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  margin: 0 2px;
+  box-shadow: 0 1px 1px rgba(0,0,0,0.04);
+}
+
+/* =========================================
+   COMMON SLIDE TYPOGRAPHY
+   ========================================= */
+.slide-chapter {
+  font-family: var(--font-display);
+  font-size: 13px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.2em;
+  color: var(--amber);
+  margin-bottom: 12px;
+}
+
+.slide-title {
+  font-family: var(--font-display);
+  font-size: 52px;
+  font-weight: 800;
   line-height: 1.15;
+  color: var(--text);
+  letter-spacing: -0.02em;
+  margin-bottom: 20px;
+}
+
+.slide-subtitle {
+  font-family: var(--font-text);
+  font-size: 20px;
+  line-height: 1.6;
+  color: var(--text-secondary);
+  max-width: 700px;
+}
+
+/* =========================================
+   STAGGERED ENTRANCE ANIMATIONS
+   ========================================= */
+.slide[data-active="true"] .anim {
+  animation: slideIn 0.6s cubic-bezier(0.4, 0, 0.2, 1) both;
+}
+.slide[data-active="true"] .anim-d1 { animation-delay: 0.1s; }
+.slide[data-active="true"] .anim-d2 { animation-delay: 0.2s; }
+.slide[data-active="true"] .anim-d3 { animation-delay: 0.3s; }
+.slide[data-active="true"] .anim-d4 { animation-delay: 0.4s; }
+.slide[data-active="true"] .anim-d5 { animation-delay: 0.5s; }
+.slide[data-active="true"] .anim-d6 { animation-delay: 0.6s; }
+.slide[data-active="true"] .anim-d7 { animation-delay: 0.7s; }
+.slide[data-active="true"] .anim-d8 { animation-delay: 0.8s; }
+
+.slide:not([data-active="true"]) .anim {
+  opacity: 0;
+  transform: translateY(30px);
+}
+
+@keyframes slideIn {
+  from { opacity: 0; transform: translateY(30px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes fadeScale {
+  from { opacity: 0; transform: scale(0.85); }
+  to { opacity: 1; transform: scale(1); }
+}
+
+@keyframes slideRight {
+  from { opacity: 0; transform: translateX(-40px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+
+@keyframes slideLeft {
+  from { opacity: 0; transform: translateX(40px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+
+/* =========================================
+   SLIDE 1: TITLE / HERO
+   ========================================= */
+.hero-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 24px;
+  padding: 6px 18px;
+  font-family: var(--font-display);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  margin-bottom: 24px;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.04);
+}
+.hero-badge-dot {
+  width: 8px; height: 8px;
+  border-radius: 50%;
+  background: var(--green);
+  animation: heroDotPulse 2s ease-in-out infinite;
+}
+@keyframes heroDotPulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(46, 139, 87, 0.4); }
+  50% { box-shadow: 0 0 0 6px rgba(46, 139, 87, 0); }
+}
+
+.hero-title {
+  font-family: var(--font-display);
+  font-size: 64px;
+  font-weight: 900;
+  line-height: 1.1;
+  letter-spacing: -0.03em;
+  margin-bottom: 24px;
+}
+.hero-title .gradient-text {
+  background: linear-gradient(135deg, var(--amber) 0%, var(--coral) 40%, var(--blue) 70%, var(--green) 100%);
+  background-size: 200% 200%;
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
   animation: gradientShift 6s ease-in-out infinite;
 }
 @keyframes gradientShift {
   0%, 100% { background-position: 0% 50%; }
   50% { background-position: 100% 50%; }
 }
-.hero-label {
-  font-family: var(--font-serif); font-size: var(--font-size-xl); font-weight: 500;
-  color: var(--color-text-secondary);
-  font-style: italic;
-}
-.hero-description {
-  font-family: var(--font-serif);
-  font-size: var(--font-size-lg); color: var(--color-text-secondary);
-  max-width: 680px; margin: 0 auto var(--space-2xl); line-height: 1.9;
-  font-style: italic;
-}
 
-/* --- Stat Cards --- */
-.hero-stats {
-  display: grid; grid-template-columns: repeat(3, 1fr);
-  gap: var(--space-lg); max-width: 900px; margin: 0 auto;
-  position: relative; z-index: 1;
+.hero-metrics {
+  display: flex;
+  gap: 32px;
+  margin-top: 40px;
 }
-.stat-card {
-  background: var(--color-surface); border: 1px solid var(--color-border);
-  border-radius: var(--radius-lg); padding: var(--space-lg) var(--space-md);
-  text-align: center; transition: all var(--transition-base);
-  position: relative; overflow: hidden;
-  box-shadow: 0 2px 12px rgba(139, 118, 90, 0.06);
+.hero-metric {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  padding: 20px 28px;
+  text-align: center;
+  box-shadow: 0 2px 12px rgba(0,0,0,0.04);
+  transition: all 0.3s ease;
+  min-width: 160px;
 }
-.stat-card::before {
-  content: ''; position: absolute; top: 0; left: 0; right: 0; height: 3px;
-  background: linear-gradient(90deg, var(--color-accent), var(--color-epp-warm));
-  opacity: 0; transition: opacity var(--transition-base);
-}
-.stat-card:hover {
-  border-color: var(--color-accent);
-  box-shadow: 0 8px 30px rgba(196, 154, 108, 0.15);
+.hero-metric:hover {
   transform: translateY(-4px);
+  box-shadow: 0 8px 30px rgba(0,0,0,0.08);
 }
-.stat-card:hover::before { opacity: 1; }
-.stat-value {
-  font-family: var(--font-serif); font-size: var(--font-size-2xl); font-weight: 700;
-  color: var(--color-epp); margin-bottom: var(--space-xs);
+.hero-metric-value {
+  font-family: var(--font-display);
+  font-size: 36px;
+  font-weight: 800;
+  line-height: 1;
+  margin-bottom: 6px;
 }
-.stat-label {
-  font-family: var(--font-sans); font-size: var(--font-size-sm); font-weight: 600;
-  margin-bottom: var(--space-xs);
+.hero-metric-value.amber { color: var(--amber); }
+.hero-metric-value.green { color: var(--green); }
+.hero-metric-value.blue { color: var(--blue); }
+.hero-metric-label {
+  font-family: var(--font-text);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-muted);
 }
-.stat-detail { font-size: 0.8rem; color: var(--color-text-muted); }
 
-/* --- Problem cards --- */
-.problem-grid {
-  display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-xl);
-  margin-top: var(--space-xl);
+.hero-right {
+  position: absolute;
+  right: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 420px;
+  height: 420px;
+}
+
+/* =========================================
+   SLIDE 2: THE PROBLEM
+   ========================================= */
+.problem-columns {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 32px;
+  margin-top: 36px;
 }
 .problem-card {
-  background: var(--color-surface); border: 1px solid var(--color-border);
-  border-radius: var(--radius-lg); padding: var(--space-xl);
-  transition: all var(--transition-base);
-  box-shadow: 0 2px 12px rgba(139, 118, 90, 0.06);
-  position: relative; overflow: hidden;
-}
-.problem-card:hover { box-shadow: 0 8px 30px rgba(0,0,0,0.08); transform: translateY(-3px); }
-.problem-card--bad { border-left: 4px solid var(--color-miss-soft); }
-.problem-card--good { border-left: 4px solid var(--color-hit-bright); }
-.problem-card h3 { font-family: var(--font-serif); font-size: var(--font-size-lg); margin-bottom: var(--space-md); font-weight: 600; }
-.problem-card--bad h3::before { content: ''; display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--color-miss-soft); margin-right: 8px; vertical-align: middle; }
-.problem-card--good h3::before { content: ''; display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--color-hit-bright); margin-right: 8px; vertical-align: middle; }
-.problem-card p { font-size: var(--font-size-sm); color: var(--color-text-secondary); line-height: 1.7; }
-
-/* --- Animated Diagram --- */
-.diagram-section {
-  position: relative; z-index: 1;
-}
-.diagram-wrapper {
-  background: var(--color-surface);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-xl); padding: var(--space-2xl);
-  box-shadow: 0 4px 30px rgba(139, 118, 90, 0.08);
-  position: relative; overflow: hidden;
-}
-.diagram-wrapper::before {
-  content: ''; position: absolute; top: -1px; left: -1px; right: -1px; bottom: -1px;
-  border-radius: var(--radius-xl);
-  background: linear-gradient(135deg, rgba(196,154,108,0.2), rgba(123,94,167,0.15), rgba(94,168,109,0.1), rgba(196,154,108,0.2));
-  background-size: 300% 300%;
-  animation: borderGlow 8s ease-in-out infinite;
-  z-index: -1;
-  mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
-  -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
-  mask-composite: exclude;
-  -webkit-mask-composite: xor;
-  padding: 2px;
-}
-@keyframes borderGlow {
-  0%, 100% { background-position: 0% 50%; }
-  50% { background-position: 100% 50%; }
-}
-
-.diagram-controls {
-  display: flex; align-items: center; justify-content: center;
-  gap: var(--space-md); margin-bottom: var(--space-xl);
-}
-.diagram-controls button {
-  font-family: var(--font-sans); font-size: var(--font-size-sm); font-weight: 600;
-  padding: 0.5rem 1.2rem; border-radius: var(--radius-md);
-  border: 1.5px solid var(--color-border); background: var(--color-surface);
-  color: var(--color-text); cursor: pointer; transition: all var(--transition-fast);
-}
-.diagram-controls button:hover:not(:disabled) { border-color: var(--color-epp); color: var(--color-epp); }
-.diagram-controls button:disabled { opacity: 0.4; cursor: not-allowed; }
-.diagram-controls button.active {
-  background: var(--color-epp); color: #fff; border-color: var(--color-epp);
-}
-.diagram-controls .step-indicator {
-  font-family: var(--font-sans); font-size: var(--font-size-sm); font-weight: 600;
-  color: var(--color-text-muted); min-width: 80px; text-align: center;
-}
-
-.scenario-tabs {
-  display: flex; gap: 4px; margin-bottom: var(--space-xl);
-  background: var(--color-border-light); border-radius: var(--radius-md); padding: 4px;
-  justify-content: center;
-}
-.scenario-tab {
-  background: none; border: none; color: var(--color-text-muted);
-  font-family: var(--font-sans); font-size: var(--font-size-sm); font-weight: 600;
-  padding: 0.5rem 1rem; cursor: pointer; border-radius: var(--radius-sm);
-  transition: all var(--transition-fast);
-}
-.scenario-tab:hover { color: var(--color-text); background: rgba(255,255,255,0.5); }
-.scenario-tab.active {
-  color: var(--color-text); background: var(--color-surface);
-  box-shadow: 0 1px 4px rgba(0,0,0,0.08);
-}
-
-.diagram-canvas { position: relative; width: 100%; height: 420px; margin-bottom: var(--space-lg); }
-
-.diagram-narration {
-  text-align: center; font-size: var(--font-size-base); color: var(--color-text-secondary);
-  min-height: 3em; line-height: 1.6;
-  padding: var(--space-md) var(--space-xl);
-  background: linear-gradient(135deg, rgba(196, 154, 108, 0.06), rgba(123, 94, 167, 0.04));
-  border-radius: var(--radius-md); border: 1px solid rgba(196, 154, 108, 0.12);
-  transition: opacity 0.3s ease;
-}
-
-/* The big start button */
-.start-button-wrapper {
-  position: absolute; top: 0; left: 0; right: 0; bottom: 0;
-  display: flex; align-items: center; justify-content: center;
-  z-index: 15; background: rgba(250, 249, 247, 0.6);
-  backdrop-filter: blur(2px); -webkit-backdrop-filter: blur(2px);
-  border-radius: var(--radius-lg);
-  transition: opacity 0.4s ease, visibility 0.4s ease;
-}
-.start-button-wrapper.hidden {
-  opacity: 0; visibility: hidden; pointer-events: none;
-}
-.start-button {
-  font-family: var(--font-serif); font-size: var(--font-size-xl); font-weight: 600;
-  padding: 1rem 2.5rem; border-radius: var(--radius-xl);
-  border: none; cursor: pointer; color: #fff;
-  background: linear-gradient(135deg, var(--color-epp), var(--color-epp-warm), var(--color-accent));
-  background-size: 200% 200%;
-  box-shadow: 0 4px 24px rgba(123, 94, 167, 0.3), 0 2px 8px rgba(196, 154, 108, 0.2);
-  transition: all 0.4s ease;
-  animation: startBtnPulse 3s ease-in-out infinite, gradientShift 6s ease-in-out infinite;
-}
-.start-button:hover {
-  transform: translateY(-3px) scale(1.03);
-  box-shadow: 0 8px 32px rgba(123, 94, 167, 0.4), 0 4px 12px rgba(196, 154, 108, 0.25);
-}
-@keyframes startBtnPulse {
-  0%, 100% { box-shadow: 0 4px 24px rgba(123, 94, 167, 0.3), 0 2px 8px rgba(196, 154, 108, 0.2); }
-  50% { box-shadow: 0 6px 28px rgba(123, 94, 167, 0.45), 0 3px 12px rgba(196, 154, 108, 0.3); }
-}
-
-/* Pod nodes */
-.pod {
-  position: absolute; width: 200px;
-  background: var(--color-surface); border: 2px solid var(--color-border);
-  border-radius: var(--radius-lg); padding: var(--space-md);
-  transition: all 0.5s ease;
-  box-shadow: 0 2px 12px rgba(139, 118, 90, 0.08);
-}
-.pod.highlighted {
-  border-color: var(--color-hit-bright);
-  box-shadow: 0 0 24px rgba(94, 168, 109, 0.2), 0 4px 12px rgba(94, 168, 109, 0.1);
-}
-.pod.miss { border-color: var(--color-miss-soft); box-shadow: 0 0 20px rgba(196, 90, 74, 0.12); }
-.pod-header {
-  display: flex; align-items: center; justify-content: space-between;
-  margin-bottom: var(--space-sm);
-  font-family: var(--font-sans); font-size: var(--font-size-sm); font-weight: 700;
-}
-.pod-status { width: 8px; height: 8px; border-radius: 50%; background: var(--color-hit-bright); animation: podPulse 2s ease-in-out infinite; }
-@keyframes podPulse {
-  0%, 100% { box-shadow: 0 0 0 0 rgba(94, 168, 109, 0.4); }
-  50% { box-shadow: 0 0 0 4px rgba(94, 168, 109, 0); }
-}
-
-.cache-blocks { display: flex; flex-wrap: wrap; gap: 3px; min-height: 40px; }
-.cache-block {
-  width: 22px; height: 22px; border-radius: 4px;
-  font-size: 7px; font-weight: 700; font-family: var(--font-mono);
-  display: flex; align-items: center; justify-content: center;
-  transition: all 0.4s ease; color: #fff;
-}
-.cache-block--empty { background: var(--color-border-light); color: var(--color-text-muted); }
-.cache-block--filled { background: var(--color-hit-bright); }
-.cache-block--match { background: var(--color-epp); animation: blockPulse 0.6s ease; }
-.cache-block--new { background: var(--color-route); animation: blockAppear 0.4s ease; }
-
-@keyframes blockPulse { 0% { transform: scale(1); } 50% { transform: scale(1.3); } 100% { transform: scale(1); } }
-@keyframes blockAppear { 0% { opacity: 0; transform: scale(0); } 100% { opacity: 1; transform: scale(1); } }
-
-/* EPP Router node */
-.epp-node {
-  position: absolute;
-  background: linear-gradient(135deg, var(--color-epp), var(--color-epp-warm));
-  color: #fff; border-radius: var(--radius-lg);
-  padding: var(--space-md) var(--space-lg); text-align: center;
-  font-family: var(--font-sans); font-weight: 700;
-  box-shadow: 0 4px 20px rgba(123, 94, 167, 0.3);
-  transition: all 0.5s ease; z-index: 5;
-  animation: eppBreathe 3s ease-in-out infinite;
-}
-@keyframes eppBreathe {
-  0%, 100% { box-shadow: 0 4px 20px rgba(123, 94, 167, 0.3); }
-  50% { box-shadow: 0 4px 28px rgba(123, 94, 167, 0.45); }
-}
-.epp-node .epp-label { font-size: var(--font-size-sm); opacity: 0.8; margin-bottom: 2px; }
-.epp-node .epp-title { font-size: var(--font-size-base); }
-
-/* Request packet */
-.request-packet {
-  position: absolute;
-  background: var(--color-route); color: #fff;
-  padding: 4px 12px; border-radius: var(--radius-md);
-  font-family: var(--font-sans); font-size: 0.7rem; font-weight: 700;
-  white-space: nowrap; opacity: 0; z-index: 10;
-  box-shadow: 0 2px 10px rgba(90, 127, 181, 0.35);
-  transition: all 0.6s cubic-bezier(0.4, 0, 0.2, 1);
-}
-.request-packet.visible { opacity: 1; }
-
-/* Score badges */
-.score-badge {
-  position: absolute;
-  font-family: var(--font-mono); font-size: 0.7rem; font-weight: 700;
-  padding: 2px 8px; border-radius: 12px;
-  opacity: 0; transition: all 0.3s ease; z-index: 6;
-}
-.score-badge.visible { opacity: 1; transform: scale(1); }
-.score-badge--high { background: #d4edda; color: var(--color-hit); box-shadow: 0 2px 8px rgba(94, 168, 109, 0.2); }
-.score-badge--low { background: #f8d7da; color: var(--color-miss); }
-.score-badge--zero { background: var(--color-border-light); color: var(--color-text-muted); }
-
-/* Connection lines (SVG) */
-.diagram-lines {
-  position: absolute; top: 0; left: 0; width: 100%; height: 100%;
-  pointer-events: none; z-index: 1;
-}
-.diagram-lines line { stroke: var(--color-border); stroke-width: 2; stroke-dasharray: 6 4; }
-.diagram-lines line.active {
-  stroke: var(--color-epp); stroke-width: 3; stroke-dasharray: none;
-  filter: drop-shadow(0 0 6px rgba(123, 94, 167, 0.4));
-  animation: lineFlow 1s ease-in-out;
-}
-.diagram-lines line.hit {
-  stroke: var(--color-hit-bright); stroke-width: 3; stroke-dasharray: none;
-  filter: drop-shadow(0 0 6px rgba(94, 168, 109, 0.4));
-  animation: lineFlow 1s ease-in-out;
-}
-.diagram-lines line.miss { stroke: var(--color-miss-soft); stroke-width: 2; stroke-dasharray: 6 4; opacity: 0.5; }
-@keyframes lineFlow {
-  0% { opacity: 0.3; stroke-width: 1; }
-  50% { opacity: 1; stroke-width: 4; }
-  100% { opacity: 1; stroke-width: 3; }
-}
-
-/* --- Keyboard hint --- */
-.keyboard-hint {
-  text-align: center; margin-top: var(--space-sm);
-  font-size: 0.75rem; color: var(--color-text-muted); opacity: 0.7;
-}
-.keyboard-hint kbd {
-  display: inline-block; padding: 1px 6px; border: 1px solid var(--color-border);
-  border-radius: 4px; background: var(--color-surface-warm); font-family: var(--font-mono);
-  font-size: 0.7rem; box-shadow: 0 1px 1px rgba(0,0,0,0.04);
-}
-
-/* --- Algorithm Steps --- */
-.steps-grid {
-  display: grid; grid-template-columns: repeat(4, 1fr);
-  gap: var(--space-lg); margin-top: var(--space-xl);
-}
-.step-card {
-  background: var(--color-surface); border: 1px solid var(--color-border);
-  border-radius: var(--radius-lg); padding: var(--space-xl);
-  transition: all var(--transition-base);
-  box-shadow: 0 2px 12px rgba(139, 118, 90, 0.06);
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  padding: 32px;
   position: relative;
+  overflow: hidden;
+  transition: all 0.3s ease;
+  box-shadow: 0 2px 12px rgba(0,0,0,0.04);
 }
-.step-card:hover { box-shadow: 0 8px 30px rgba(0,0,0,0.08); transform: translateY(-3px); }
-.step-card::after {
-  content: ''; position: absolute; bottom: 0; left: 50%; transform: translateX(-50%);
+.problem-card:hover {
+  transform: translateY(-4px);
+  box-shadow: 0 8px 30px rgba(0,0,0,0.08);
+}
+.problem-card--bad { border-left: 5px solid var(--coral); }
+.problem-card--good { border-left: 5px solid var(--green); }
+.problem-card-icon {
+  width: 48px; height: 48px;
+  border-radius: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 16px;
+  font-size: 24px;
+}
+.problem-card-icon.coral-bg { background: var(--coral-light); }
+.problem-card-icon.green-bg { background: var(--green-light); }
+.problem-card h3 {
+  font-family: var(--font-display);
+  font-size: 22px;
+  font-weight: 700;
+  margin-bottom: 12px;
+}
+.problem-card p {
+  font-size: 15px;
+  line-height: 1.7;
+  color: var(--text-secondary);
+}
+
+/* =========================================
+   SLIDE 3: CANVAS ROUTING ANIMATION
+   ========================================= */
+.routing-canvas-wrapper {
+  width: 100%;
+  height: 100%;
+  position: absolute;
+  top: 0; left: 0;
+}
+#routingCanvas {
+  width: 100%;
+  height: 100%;
+}
+.canvas-overlay-text {
+  position: absolute;
+  bottom: 80px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  padding: 16px 32px;
+  font-family: var(--font-text);
+  font-size: 16px;
+  color: var(--text-secondary);
+  text-align: center;
+  max-width: 600px;
+  box-shadow: 0 4px 20px rgba(0,0,0,0.06);
+  z-index: 10;
+  transition: opacity 0.4s ease;
+  line-height: 1.5;
+}
+.canvas-title-overlay {
+  position: absolute;
+  top: 40px;
+  left: 50%;
+  transform: translateX(-50%);
+  text-align: center;
+  z-index: 10;
+}
+
+/* =========================================
+   SLIDE 4: THE ALGORITHM (4 steps)
+   ========================================= */
+.algo-steps {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 24px;
+  margin-top: 40px;
+}
+.algo-step {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  padding: 28px 24px;
+  position: relative;
+  transition: all 0.3s ease;
+  box-shadow: 0 2px 12px rgba(0,0,0,0.04);
+}
+.algo-step:hover {
+  transform: translateY(-4px);
+  box-shadow: 0 8px 30px rgba(0,0,0,0.08);
+}
+.algo-step::after {
+  content: '';
+  position: absolute;
+  bottom: 0; left: 50%;
+  transform: translateX(-50%);
   width: 0; height: 3px;
-  background: linear-gradient(90deg, var(--color-accent), var(--color-epp-warm));
+  background: linear-gradient(90deg, var(--amber), var(--blue));
   border-radius: 3px 3px 0 0;
   transition: width 0.3s ease;
 }
-.step-card:hover::after { width: 60%; }
-.step-number {
-  display: inline-flex; align-items: center; justify-content: center;
-  width: 36px; height: 36px;
-  background: linear-gradient(135deg, var(--color-epp), var(--color-epp-warm));
-  color: #fff; font-family: var(--font-sans); font-size: var(--font-size-sm); font-weight: 800;
-  border-radius: 50%; margin-bottom: var(--space-md);
-  box-shadow: 0 2px 8px rgba(123, 94, 167, 0.3);
+.algo-step:hover::after { width: 60%; }
+.algo-step-num {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px; height: 40px;
+  border-radius: 50%;
+  font-family: var(--font-display);
+  font-size: 16px;
+  font-weight: 800;
+  color: #fff;
+  margin-bottom: 16px;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.15);
 }
-.step-card h3 { font-family: var(--font-serif); font-size: var(--font-size-lg); font-weight: 600; }
-.step-card p { font-size: var(--font-size-sm); color: var(--color-text-secondary); line-height: 1.7; margin-top: var(--space-sm); }
-
-/* --- Scenario Cards --- */
-.scenarios-grid {
-  display: grid; grid-template-columns: repeat(3, 1fr);
-  gap: var(--space-lg); margin-top: var(--space-xl);
+.algo-step-num.amber-bg { background: var(--amber); }
+.algo-step-num.coral-bg { background: var(--coral); }
+.algo-step-num.blue-bg { background: var(--blue); }
+.algo-step-num.green-bg { background: var(--green); }
+.algo-step h3 {
+  font-family: var(--font-display);
+  font-size: 18px;
+  font-weight: 700;
+  margin-bottom: 10px;
 }
-.scenario-card {
-  background: var(--color-surface); border: 1px solid var(--color-border);
-  border-radius: var(--radius-lg); padding: var(--space-xl);
-  transition: all var(--transition-base);
-  box-shadow: 0 2px 12px rgba(139, 118, 90, 0.06);
-}
-.scenario-card:hover { box-shadow: 0 8px 30px rgba(0,0,0,0.08); transform: translateY(-3px); }
-.scenario-icon {
-  width: 48px; height: 48px; border-radius: var(--radius-md);
-  display: flex; align-items: center; justify-content: center;
-  font-size: 1.5rem; margin-bottom: var(--space-md);
-  transition: transform 0.3s ease;
-}
-.scenario-card:hover .scenario-icon { transform: scale(1.1); }
-.scenario-icon--chat { background: rgba(123, 94, 167, 0.1); color: var(--color-epp); }
-.scenario-icon--agent { background: rgba(90, 127, 181, 0.1); color: var(--color-route); }
-.scenario-icon--doc { background: rgba(94, 168, 109, 0.1); color: var(--color-hit); }
-.scenario-card h3 { font-family: var(--font-serif); font-size: var(--font-size-lg); margin-bottom: var(--space-sm); font-weight: 600; }
-.scenario-card p { font-size: var(--font-size-sm); color: var(--color-text-secondary); line-height: 1.7; }
-.scenario-benefit {
-  margin-top: var(--space-md); padding: var(--space-sm) var(--space-md);
-  background: rgba(94, 168, 109, 0.08); border-radius: var(--radius-sm);
-  font-size: var(--font-size-sm); font-weight: 600; color: var(--color-hit);
-  border-left: 3px solid var(--color-hit-bright);
+.algo-step p {
+  font-size: 14px;
+  line-height: 1.65;
+  color: var(--text-secondary);
 }
 
-/* Scenario icon SVGs */
-.scenario-icon svg { width: 24px; height: 24px; }
+/* =========================================
+   SLIDE 5: WHERE IT SHINES
+   ========================================= */
+.use-cases {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 28px;
+  margin-top: 36px;
+}
+.use-case {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  padding: 28px;
+  transition: all 0.3s ease;
+  box-shadow: 0 2px 12px rgba(0,0,0,0.04);
+}
+.use-case:hover {
+  transform: translateY(-4px);
+  box-shadow: 0 8px 30px rgba(0,0,0,0.08);
+}
+.use-case-icon {
+  width: 52px; height: 52px;
+  border-radius: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 16px;
+  font-size: 24px;
+}
+.use-case-icon.purple-bg { background: var(--purple-light); }
+.use-case-icon.blue-bg { background: var(--blue-light); }
+.use-case-icon.amber-bg { background: var(--amber-light); }
+.use-case h3 {
+  font-family: var(--font-display);
+  font-size: 20px;
+  font-weight: 700;
+  margin-bottom: 10px;
+}
+.use-case p {
+  font-size: 14px;
+  line-height: 1.65;
+  color: var(--text-secondary);
+  margin-bottom: 14px;
+}
+.use-case-stat {
+  padding: 10px 14px;
+  background: var(--green-light);
+  border-radius: 10px;
+  border-left: 4px solid var(--green);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--green);
+}
 
-/* --- Comparison Section --- */
-.comparison-wrapper {
-  display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-xl);
-  margin-top: var(--space-xl);
+/* =========================================
+   SLIDE 6: CACHE HIT/MISS CANVAS
+   ========================================= */
+.comparison-slide-layout {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 32px;
+  margin-top: 32px;
 }
 .comparison-panel {
-  background: var(--color-surface); border: 1px solid var(--color-border);
-  border-radius: var(--radius-lg); padding: var(--space-xl);
-  box-shadow: 0 2px 12px rgba(139, 118, 90, 0.06);
-  position: relative; overflow: hidden;
-  transition: all var(--transition-base);
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  padding: 28px;
+  box-shadow: 0 2px 12px rgba(0,0,0,0.04);
+  position: relative;
+  overflow: hidden;
 }
-.comparison-panel:hover { box-shadow: 0 8px 24px rgba(0,0,0,0.06); }
-.comparison-panel--rr { border-top: 4px solid var(--color-miss-soft); }
-.comparison-panel--ca { border-top: 4px solid var(--color-hit-bright); }
+.comparison-panel--rr { border-top: 4px solid var(--coral); }
+.comparison-panel--ca { border-top: 4px solid var(--green); }
 .comparison-panel h3 {
-  font-family: var(--font-serif); font-size: var(--font-size-lg); font-weight: 600;
-  margin-bottom: var(--space-md);
-  display: flex; align-items: center; gap: var(--space-sm);
+  font-family: var(--font-display);
+  font-size: 20px;
+  font-weight: 700;
+  margin-bottom: 6px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
 }
-.comparison-label {
-  font-family: var(--font-sans);
-  font-size: 0.7rem; font-weight: 700; text-transform: uppercase;
-  letter-spacing: 0.08em; padding: 2px 10px; border-radius: 12px;
+.comp-label {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  padding: 3px 10px;
+  border-radius: 12px;
 }
-.comparison-label--rr { background: #f8d7da; color: var(--color-miss); }
-.comparison-label--ca { background: #d4edda; color: var(--color-hit); }
-.comparison-visual { display: flex; gap: var(--space-md); justify-content: center; margin: var(--space-lg) 0; }
-.mini-pod {
-  width: 80px; padding: var(--space-sm);
-  border: 2px solid var(--color-border); border-radius: var(--radius-md);
-  text-align: center; font-family: var(--font-sans); font-size: 0.7rem; font-weight: 700;
-  transition: all 0.5s ease;
+.comp-label--rr { background: var(--coral-light); color: var(--coral); }
+.comp-label--ca { background: var(--green-light); color: var(--green); }
+.comparison-panel p {
+  font-size: 14px;
+  color: var(--text-secondary);
+  line-height: 1.6;
+  margin-bottom: 16px;
 }
-.mini-pod.active { border-color: var(--color-hit-bright); background: rgba(94, 168, 109, 0.04); }
-.mini-pod .mini-cache { display: flex; flex-wrap: wrap; gap: 2px; justify-content: center; margin-top: var(--space-xs); min-height: 20px; }
-.mini-block { width: 12px; height: 12px; border-radius: 2px; transition: all 0.3s ease; }
-.mini-block--empty { background: var(--color-border-light); }
-.mini-block--filled { background: var(--color-hit-bright); }
-.mini-block--miss { background: var(--color-miss-soft); opacity: 0.5; }
-.comparison-stats { display: flex; flex-direction: column; gap: var(--space-sm); margin-top: var(--space-md); }
-.comparison-stat { display: flex; justify-content: space-between; align-items: center; font-size: var(--font-size-sm); }
-.comparison-stat-label { color: var(--color-text-secondary); }
-.comparison-stat-value { font-family: var(--font-mono); font-weight: 700; }
-.comparison-stat-value--good { color: var(--color-hit); }
-.comparison-stat-value--bad { color: var(--color-miss); }
+.comp-canvas-wrap {
+  height: 120px;
+  margin: 12px 0;
+}
+.comp-stats {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 12px;
+}
+.comp-stat {
+  display: flex;
+  justify-content: space-between;
+  font-size: 14px;
+}
+.comp-stat-label { color: var(--text-secondary); }
+.comp-stat-value {
+  font-family: var(--font-mono);
+  font-weight: 700;
+}
+.comp-stat-value.good { color: var(--green); }
+.comp-stat-value.bad { color: var(--coral); }
 
-/* --- FAQ Section --- */
+/* =========================================
+   SLIDE 7: FAQ
+   ========================================= */
 .faq-grid {
-  display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-lg);
-  margin-top: var(--space-xl);
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 20px;
+  margin-top: 32px;
 }
-.faq-item {
-  background: var(--color-surface); border: 1px solid var(--color-border);
-  border-radius: var(--radius-lg); padding: var(--space-xl);
-  transition: all var(--transition-base);
-  box-shadow: 0 2px 12px rgba(139, 118, 90, 0.06);
-  position: relative; overflow: hidden;
+.faq-card {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  padding: 24px;
+  transition: all 0.3s ease;
+  box-shadow: 0 2px 12px rgba(0,0,0,0.04);
+  position: relative;
+  overflow: hidden;
 }
-.faq-item:hover { box-shadow: 0 8px 24px rgba(0,0,0,0.08); transform: translateY(-2px); }
-.faq-item::before {
-  content: 'Q'; position: absolute; top: 16px; right: 18px;
-  font-family: var(--font-serif); font-size: 2.5rem; font-weight: 700;
-  color: var(--color-accent); opacity: 0.08; line-height: 1;
+.faq-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 8px 24px rgba(0,0,0,0.08);
 }
-.faq-item h3 {
-  font-family: var(--font-serif); font-size: var(--font-size-base); font-weight: 600;
-  margin-bottom: var(--space-sm);
-  color: var(--color-epp);
+.faq-card::before {
+  content: 'Q';
+  position: absolute;
+  top: 12px; right: 16px;
+  font-family: var(--font-display);
+  font-size: 48px;
+  font-weight: 900;
+  color: var(--amber);
+  opacity: 0.06;
+  line-height: 1;
 }
-.faq-item p {
-  font-size: var(--font-size-sm); color: var(--color-text-secondary);
-  line-height: 1.7; margin: 0;
+.faq-card h4 {
+  font-family: var(--font-display);
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--purple);
+  margin-bottom: 8px;
+  line-height: 1.4;
+}
+.faq-card p {
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--text-secondary);
 }
 
-/* --- Callout box --- */
-.callout-box {
-  max-width: 720px; margin: var(--space-xl) auto 0;
-  padding: var(--space-lg) var(--space-xl);
-  background: var(--color-surface);
-  border-left: 4px solid var(--color-accent);
-  border-radius: 0 var(--radius-md) var(--radius-md) 0;
-  box-shadow: 0 2px 12px rgba(139, 118, 90, 0.06);
-}
-.callout-box p {
-  margin: 0; font-size: var(--font-size-sm); color: var(--color-text-secondary); line-height: 1.7;
-}
-.callout-box strong { color: var(--color-text); }
-
-/* --- Concluding narrative --- */
-.concluding-narrative {
-  max-width: 720px;
-  margin: var(--space-2xl) auto 0;
+/* =========================================
+   SLIDE 8: CLOSING
+   ========================================= */
+.closing-quote {
+  font-family: var(--font-display);
+  font-size: 32px;
+  font-weight: 700;
+  line-height: 1.4;
+  color: var(--text);
+  max-width: 800px;
   text-align: center;
-  font-family: var(--font-serif);
-  font-size: var(--font-size-lg);
-  font-style: italic;
-  color: var(--color-text-secondary);
-  line-height: 1.9;
+  margin: 0 auto 40px;
+  letter-spacing: -0.01em;
+}
+.closing-quote .highlight {
+  background: linear-gradient(135deg, var(--amber), var(--coral));
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
 }
 
-/* --- Footer --- */
-.site-footer {
-  background: var(--color-surface); border-top: 1px solid var(--color-border);
-  padding: var(--space-2xl) 0; text-align: center;
-  position: relative; z-index: 1;
+.closing-links {
+  display: flex;
+  gap: 16px;
+  justify-content: center;
+  margin-bottom: 40px;
 }
-.footer-content { display: flex; flex-direction: column; align-items: center; gap: var(--space-md); }
-.footer-links { display: flex; gap: var(--space-xl); }
-.footer-links a {
-  font-family: var(--font-sans); font-size: var(--font-size-sm); font-weight: 600;
-  color: var(--color-text-secondary); transition: color 0.2s ease;
+.closing-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 28px;
+  border-radius: 12px;
+  font-family: var(--font-display);
+  font-size: 15px;
+  font-weight: 700;
+  text-decoration: none;
+  transition: all 0.3s ease;
+  cursor: pointer;
 }
-.footer-links a:hover { color: var(--color-epp); text-decoration: none; }
-.footer-author { font-size: var(--font-size-sm); color: var(--color-text-secondary); }
-.footer-meta { font-size: var(--font-size-sm); color: var(--color-text-muted); }
+.closing-link--primary {
+  background: linear-gradient(135deg, var(--amber), var(--coral));
+  color: #fff;
+  box-shadow: 0 4px 16px var(--amber-glow);
+}
+.closing-link--primary:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 8px 24px var(--amber-glow);
+}
+.closing-link--outline {
+  background: var(--card);
+  color: var(--text);
+  border: 2px solid var(--border);
+}
+.closing-link--outline:hover {
+  border-color: var(--amber);
+  transform: translateY(-2px);
+}
+.closing-link svg {
+  width: 18px; height: 18px;
+}
 
-/* --- Responsive --- */
+.closing-footer {
+  text-align: center;
+  font-size: 14px;
+  color: var(--text-muted);
+  line-height: 1.8;
+}
+.closing-footer strong {
+  color: var(--text-secondary);
+}
+
+/* =========================================
+   POD ANIMATION CSS HELPERS
+   ========================================= */
+@keyframes podGlow {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(46, 139, 87, 0.3); }
+  50% { box-shadow: 0 0 20px 4px rgba(46, 139, 87, 0.15); }
+}
+@keyframes requestFly {
+  0% { opacity: 0; transform: translate(-50%, -50%) scale(0.5); }
+  20% { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+  80% { opacity: 1; }
+  100% { opacity: 0; }
+}
+
+/* =========================================
+   RESPONSIVE
+   ========================================= */
 @media (max-width: 1024px) {
-  .hero-stats { grid-template-columns: repeat(3, 1fr); }
-  .steps-grid { grid-template-columns: repeat(2, 1fr); }
-  .scenarios-grid { grid-template-columns: repeat(2, 1fr); }
-  .comparison-wrapper { grid-template-columns: 1fr; }
-  .problem-grid { grid-template-columns: 1fr; }
-  .faq-grid { grid-template-columns: 1fr; }
+  .slide { padding: 40px 40px; }
+  .hero-title { font-size: 48px; }
+  .slide-title { font-size: 40px; }
+  .algo-steps { grid-template-columns: repeat(2, 1fr); }
+  .hero-right { display: none; }
+  .hero-metrics { flex-wrap: wrap; }
 }
 @media (max-width: 768px) {
-  :root { --font-size-hero: 2.5rem; --font-size-3xl: 1.75rem; --font-size-2xl: 1.25rem; }
-  .container { padding: 0 var(--space-md); }
-  .chapter { padding: var(--space-3xl) 0 var(--space-2xl); }
-  .header-content { flex-direction: column; align-items: flex-start; gap: var(--space-sm); }
-  .hero { padding: 3rem 0 2rem; }
-  .hero-stats { grid-template-columns: 1fr; max-width: 400px; }
-  .steps-grid, .scenarios-grid { grid-template-columns: 1fr; }
-  .diagram-canvas { height: 350px; }
-  .scenario-tabs { flex-wrap: wrap; }
-  .footer-links { flex-direction: column; gap: var(--space-sm); }
+  .slide { padding: 30px 24px; }
+  .hero-title { font-size: 36px; }
+  .slide-title { font-size: 32px; }
+  .problem-columns, .comparison-slide-layout, .faq-grid { grid-template-columns: 1fr; }
+  .use-cases { grid-template-columns: 1fr; }
+  .algo-steps { grid-template-columns: 1fr; }
+  .nav-arrows { bottom: 24px; }
   .keyboard-hint { display: none; }
-}
-@media (max-width: 480px) {
-  :root { --font-size-hero: 2rem; }
-  .diagram-canvas { height: 300px; }
-  .pod { width: 140px; padding: var(--space-sm); }
+  .hero-metrics { flex-direction: column; }
 }
   </style>
 </head>
 <body>
 
-<div class="blob-canvas">
-  <div class="blob blob--peach"></div>
-  <div class="blob blob--lavender"></div>
-  <div class="blob blob--sage"></div>
-  <div class="blob blob--gold"></div>
+<!-- BACKGROUND -->
+<div class="bg-gradient">
+  <div class="bg-blob bg-blob--amber"></div>
+  <div class="bg-blob bg-blob--coral"></div>
+  <div class="bg-blob bg-blob--blue"></div>
+  <div class="bg-blob bg-blob--green"></div>
 </div>
-<div class="scroll-progress"></div>
 
-<header class="site-header">
-  <div class="container">
-    <div class="header-content">
-      <div class="header-text">
-        <h1>llm-d Routing Deep Dive</h1>
-        <div class="subtitle">How prefix-cache-aware routing eliminates redundant GPU compute</div>
-      </div>
-      <div class="header-links">
-        <a href="https://github.com/llm-d/llm-d" class="btn btn-outline" target="_blank">
-          <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
-          GitHub
-        </a>
-        <a href="https://llm-d.ai" class="btn btn-primary" target="_blank">What is llm-d?</a>
-      </div>
-    </div>
-  </div>
-</header>
+<!-- PROGRESS BAR -->
+<div class="progress-bar" id="progressBar"></div>
 
-<!-- ═══════════════════════════════════════════════ -->
-<!-- CHAPTER ONE: The Problem                       -->
-<!-- ═══════════════════════════════════════════════ -->
-<section class="chapter" id="chapter-1">
-  <div class="container">
-    <div class="chapter-marker reveal">
-      <div class="chapter-number">Chapter One</div>
-      <h2 class="chapter-title">The Problem</h2>
-    </div>
-    <p class="chapter-intro reveal reveal-delay-1">
-      Every time an LLM processes a prompt, it computes a massive matrix of attention states -- the KV cache.
-      When two requests share the same beginning, that computation is identical --
-      yet standard load balancers force every pod to redo it from scratch.
-    </p>
+<!-- SLIDE COUNTER -->
+<div class="slide-counter" id="slideCounter">1 / 8</div>
 
-    <div class="problem-grid" style="margin-top: var(--space-2xl);">
-      <div class="problem-card problem-card--bad reveal reveal-delay-2">
-        <h3>Round-Robin Routing</h3>
-        <p>
-          Request 1 goes to Pod A, which computes the full KV cache. Request 2 -- with the exact same system
-          prompt -- goes to Pod B, which has to compute it all over again. The cache sitting in Pod A is wasted.
-          Multiply this across every request, and you are burning GPU cycles recomputing attention states that
-          already exist somewhere in your fleet.
+<!-- SLIDES -->
+<div class="slides-viewport">
+  <div class="slides-track" id="slidesTrack">
+
+    <!-- ========== SLIDE 1: TITLE ========== -->
+    <div class="slide" data-active="true">
+      <div class="slide-inner">
+        <div class="hero-badge anim">
+          <span class="hero-badge-dot"></span>
+          llm-d Routing Deep Dive
+        </div>
+        <h1 class="hero-title anim anim-d1">
+          <span class="gradient-text">Prefix-Cache-Aware</span><br>
+          Routing
+        </h1>
+        <p class="slide-subtitle anim anim-d2">
+          When two requests share the same beginning, the KV cache computation is identical.
+          llm-d's EPP knows what each pod has cached -- and routes to the pod that already has
+          the answer half-computed.
         </p>
+        <div class="hero-metrics anim anim-d3">
+          <div class="hero-metric">
+            <div class="hero-metric-value amber" id="metricTTFT">47.5x</div>
+            <div class="hero-metric-label">Faster TTFT</div>
+          </div>
+          <div class="hero-metric">
+            <div class="hero-metric-value green">~0ms</div>
+            <div class="hero-metric-label">Prefill on Cache Hit</div>
+          </div>
+          <div class="hero-metric">
+            <div class="hero-metric-value blue">0%</div>
+            <div class="hero-metric-label">Redundant Compute</div>
+          </div>
+        </div>
+        <div class="hero-right anim anim-d4">
+          <canvas id="heroCanvas" width="420" height="420"></canvas>
+        </div>
       </div>
-      <div class="problem-card problem-card--good reveal reveal-delay-3">
-        <h3>Cache-Aware Routing</h3>
-        <p>
-          The EPP (Endpoint Picker Policy) knows what each pod has cached. When Request 2 arrives with the
-          same prefix, the EPP routes it to Pod A -- the pod that already has the cache. Pod A skips the entire
-          prefill phase and goes straight to generating tokens. Zero redundant compute. The longer the shared
-          prefix, the bigger the savings.
+    </div>
+
+    <!-- ========== SLIDE 2: THE PROBLEM ========== -->
+    <div class="slide">
+      <div class="slide-inner">
+        <div class="slide-chapter anim">Chapter One</div>
+        <h2 class="slide-title anim anim-d1">The Problem</h2>
+        <p class="slide-subtitle anim anim-d2">
+          Every LLM prompt computes a massive matrix of attention states -- the KV cache.
+          Standard load balancers scatter requests randomly, forcing every pod to redo this
+          computation from scratch.
         </p>
-      </div>
-    </div>
-
-    <div class="hero-stats" style="margin-top: var(--space-2xl);">
-      <div class="stat-card reveal reveal-delay-1">
-        <div class="stat-value" data-count="47.5" data-suffix="x">47.5x</div>
-        <div class="stat-label">Faster TTFT</div>
-        <div class="stat-detail">At 32K token context with cache hit</div>
-      </div>
-      <div class="stat-card reveal reveal-delay-2">
-        <div class="stat-value">~0ms</div>
-        <div class="stat-label">Prefill on Cache Hit</div>
-        <div class="stat-detail">Skip entire prefill phase</div>
-      </div>
-      <div class="stat-card reveal reveal-delay-3">
-        <div class="stat-value" data-count="3" data-suffix=" Pods">3 Pods</div>
-        <div class="stat-label">Cache State Tracked</div>
-        <div class="stat-detail">EPP knows what each pod has cached</div>
-      </div>
-    </div>
-  </div>
-</section>
-
-<div class="chapter-divider"></div>
-
-<!-- ═══════════════════════════════════════════════ -->
-<!-- CHAPTER TWO: The Insight                       -->
-<!-- ═══════════════════════════════════════════════ -->
-<section class="chapter" id="chapter-2">
-  <div class="container">
-    <div class="chapter-marker reveal">
-      <div class="chapter-number">Chapter Two</div>
-      <h2 class="chapter-title">The Insight</h2>
-    </div>
-    <p class="chapter-intro reveal reveal-delay-1">
-      The KV cache is not a temporary artifact -- it is a reusable asset. When routing is aware
-      of what each pod has cached, the same computation never has to happen twice.
-    </p>
-
-    <!-- How Long Does the Cache Last? -->
-    <div style="margin-top: var(--space-2xl);">
-      <h3 style="font-family: var(--font-serif); font-size: var(--font-size-xl); font-weight: 600; margin-bottom: var(--space-lg); text-align: center;" class="reveal">How Long Does the Cache Last?</h3>
-      <p style="text-align: center; color: var(--color-text-secondary); margin-bottom: var(--space-xl); max-width: 720px; margin-left: auto; margin-right: auto;" class="reveal reveal-delay-1">
-        The most common question people ask. The answer: there is no timer.
-        The prefix cache lives in GPU memory and persists until something pushes it out.
-      </p>
-      <div class="problem-grid reveal reveal-delay-2">
-        <div class="problem-card problem-card--good">
-          <h3>Not time-based -- memory-based</h3>
-          <p>
-            vLLM uses LRU (least recently used) eviction. When GPU memory fills up with cached blocks
-            from many different prompts, the blocks that have not been accessed in the longest time
-            get evicted first. Under low traffic with consistent system prompts, cached blocks can
-            persist indefinitely -- hours, days, as long as the pod is running.
-          </p>
-        </div>
-        <div class="problem-card problem-card--bad">
-          <h3>What clears the cache</h3>
-          <p>
-            Three things evict cached blocks: memory pressure from diverse prompts (LRU eviction),
-            pod restarts (cache starts empty), and GPU memory limits. There is no TTL, no expiration
-            timer, no scheduled flush. If your workload keeps hitting the same system prompt,
-            those blocks stay warm.
-          </p>
+        <div class="problem-columns">
+          <div class="problem-card problem-card--bad anim anim-d3">
+            <div class="problem-card-icon coral-bg">
+              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="color:var(--coral)"><path d="M18 6L6 18M6 6l12 12"/></svg>
+            </div>
+            <h3>Round-Robin Routing</h3>
+            <p>
+              Request 1 goes to Pod A, which computes the full KV cache. Request 2 -- with the exact same
+              system prompt -- goes to Pod B, which computes it all over again. The cache sitting in
+              Pod A's GPU memory is wasted. Multiply this across every request and you are burning
+              GPU cycles recomputing attention states that already exist.
+            </p>
+          </div>
+          <div class="problem-card problem-card--good anim anim-d4">
+            <div class="problem-card-icon green-bg">
+              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="color:var(--green)"><polyline points="20 6 9 17 4 12"/></svg>
+            </div>
+            <h3>Cache-Aware Routing</h3>
+            <p>
+              The EPP (Endpoint Picker Policy) knows what each pod has cached. When Request 2 arrives
+              with the same prefix, the EPP routes it to Pod A -- the pod that already has the cache.
+              Pod A skips the entire prefill phase and goes straight to generating tokens. Zero
+              redundant compute. The longer the shared prefix, the bigger the savings.
+            </p>
+          </div>
         </div>
       </div>
-      <div class="callout-box reveal">
-        <p>
-          <strong>Why this matters for routing:</strong>
-          Cache-aware routing compounds the benefit. By concentrating requests with the same prefix
-          onto the same pod, llm-d keeps that pod's cache hot for exactly the tokens that matter.
-          The more consistent your prompt patterns, the higher your cache hit rate -- and the
-          longer those blocks persist in GPU memory without eviction.
+    </div>
+
+    <!-- ========== SLIDE 3: ROUTING ANIMATION ========== -->
+    <div class="slide" style="padding: 0;">
+      <div class="routing-canvas-wrapper">
+        <canvas id="routingCanvas"></canvas>
+      </div>
+      <div class="canvas-title-overlay anim anim-d1">
+        <div class="slide-chapter">Chapter Two</div>
+        <h2 class="slide-title" style="font-size: 40px; margin-bottom: 8px;">Watch It Work</h2>
+        <p style="font-size: 16px; color: var(--text-secondary);">Cache-aware routing in action -- auto-playing now</p>
+      </div>
+      <div class="canvas-overlay-text" id="routingNarration">
+        A new request arrives at the EPP. The router checks each pod's cached prefix blocks...
+      </div>
+    </div>
+
+    <!-- ========== SLIDE 4: THE ALGORITHM ========== -->
+    <div class="slide">
+      <div class="slide-inner">
+        <div class="slide-chapter anim">Chapter Three</div>
+        <h2 class="slide-title anim anim-d1">The Algorithm</h2>
+        <p class="slide-subtitle anim anim-d2">
+          Four steps from request to routed response. The EPP makes this decision in
+          microseconds, before the request ever reaches a vLLM pod.
         </p>
-      </div>
-    </div>
-
-    <!-- Where It Matters Most -->
-    <div style="margin-top: var(--space-3xl);">
-      <h3 style="font-family: var(--font-serif); font-size: var(--font-size-xl); font-weight: 600; margin-bottom: var(--space-sm); text-align: center;" class="reveal">Where It Matters Most</h3>
-      <p style="text-align: center; color: var(--color-text-secondary); margin-bottom: var(--space-xl); max-width: 720px; margin-left: auto; margin-right: auto;" class="reveal reveal-delay-1">
-        Prefix-cache-aware routing delivers the biggest gains in workloads with high prefix overlap.
-        These three patterns are where the math works hardest in your favor.
-      </p>
-      <div class="scenarios-grid">
-        <div class="scenario-card reveal reveal-delay-1">
-          <div class="scenario-icon scenario-icon--chat">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+        <div class="algo-steps">
+          <div class="algo-step anim anim-d3">
+            <div class="algo-step-num amber-bg">1</div>
+            <h3>Request Arrives</h3>
+            <p>A chat completion request hits the Gateway API. The EPP intercepts it and extracts the token prefix -- the system message plus conversation history.</p>
           </div>
-          <h3>Multi-Turn Conversations</h3>
-          <p>
-            Each turn in a conversation builds on the previous one. Turn 3's prompt contains all of turns 1 and 2
-            as prefix. Routing to the same pod means turns 1-2 are already cached -- only the new user message
-            needs prefilling.
-          </p>
-          <div class="scenario-benefit">Turn N reuses 100% of turns 1 through N-1</div>
-        </div>
-        <div class="scenario-card reveal reveal-delay-2">
-          <div class="scenario-icon scenario-icon--agent">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
+          <div class="algo-step anim anim-d4">
+            <div class="algo-step-num coral-bg">2</div>
+            <h3>Query Cache State</h3>
+            <p>The EPP maintains a near-real-time map of what each pod has cached. It checks every replica's cached prefix blocks against the incoming request.</p>
           </div>
-          <h3>Agentic Workflows</h3>
-          <p>
-            Agent frameworks send parallel requests that all share the same system prompt. The first call
-            computes the cache; every subsequent parallel call to the same pod skips the system prompt prefill
-            entirely. 10 parallel tool calls = 1 cold prefill + 9 cache hits.
-          </p>
-          <div class="scenario-benefit">N parallel calls = 1 prefill + (N-1) cache hits</div>
-        </div>
-        <div class="scenario-card reveal reveal-delay-3">
-          <div class="scenario-icon scenario-icon--doc">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>
+          <div class="algo-step anim anim-d5">
+            <div class="algo-step-num blue-bg">3</div>
+            <h3>Score by Overlap</h3>
+            <p>Each pod gets a score based on the longest prefix match -- how many contiguous token blocks from the start of the request are already in that pod's KV cache.</p>
           </div>
-          <h3>Long-Context Documents</h3>
-          <p>
-            When users ask multiple questions about the same document, the document tokens are identical across
-            requests. A 32K-token document cached on Pod A means every follow-up question skips 32K tokens of
-            prefill computation -- that is where the 47.5x speedup comes from.
-          </p>
-          <div class="scenario-benefit">32K cached tokens = 3,700ms to 79ms TTFT</div>
+          <div class="algo-step anim anim-d6">
+            <div class="algo-step-num green-bg">4</div>
+            <h3>Route to Best Match</h3>
+            <p>The request goes to the highest-scoring pod. On a full cache hit, the pod skips prefill entirely and goes straight to generating new tokens.</p>
+          </div>
         </div>
       </div>
     </div>
 
-    <!-- Comparison Side-by-Side -->
-    <div style="margin-top: var(--space-3xl);">
-      <h3 style="font-family: var(--font-serif); font-size: var(--font-size-xl); font-weight: 600; margin-bottom: var(--space-sm); text-align: center;" class="reveal">Round-Robin vs Cache-Aware</h3>
-      <p style="text-align: center; color: var(--color-text-secondary); margin-bottom: var(--space-xl); max-width: 720px; margin-left: auto; margin-right: auto;" class="reveal reveal-delay-1">
-        Side-by-side comparison of what happens when 5 requests with the same system prompt
-        hit a 3-pod cluster.
-      </p>
-      <div class="comparison-wrapper">
-        <div class="comparison-panel comparison-panel--rr reveal reveal-delay-1">
-          <h3>Round-Robin <span class="comparison-label comparison-label--rr">Baseline</span></h3>
-          <p style="font-size: 0.9rem; color: var(--color-text-secondary); margin-bottom: var(--space-md);">
-            Requests scatter across pods. Each pod computes the system prompt KV cache independently.
-          </p>
-          <div class="comparison-visual" id="rrVisual">
-            <div class="mini-pod"><div>Pod 1</div><div class="mini-cache" id="rrCache1"></div></div>
-            <div class="mini-pod"><div>Pod 2</div><div class="mini-cache" id="rrCache2"></div></div>
-            <div class="mini-pod"><div>Pod 3</div><div class="mini-cache" id="rrCache3"></div></div>
+    <!-- ========== SLIDE 5: WHERE IT SHINES ========== -->
+    <div class="slide">
+      <div class="slide-inner">
+        <div class="slide-chapter anim">Chapter Four</div>
+        <h2 class="slide-title anim anim-d1">Where It Shines</h2>
+        <p class="slide-subtitle anim anim-d2">
+          Prefix-cache-aware routing delivers the biggest gains in workloads with high prefix overlap.
+          These three patterns are where the math works hardest in your favor.
+        </p>
+        <div class="use-cases">
+          <div class="use-case anim anim-d3">
+            <div class="use-case-icon purple-bg">
+              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="var(--purple)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+            </div>
+            <h3>Multi-Turn Conversations</h3>
+            <p>
+              Each turn builds on the previous. Turn 3's prompt contains all of turns 1 and 2 as prefix.
+              Routing to the same pod means only the new message needs prefilling.
+            </p>
+            <div class="use-case-stat">Turn N reuses 100% of turns 1 through N-1</div>
           </div>
-          <div class="comparison-stats">
-            <div class="comparison-stat"><span class="comparison-stat-label">Cache hits</span><span class="comparison-stat-value comparison-stat-value--bad">0 / 5</span></div>
-            <div class="comparison-stat"><span class="comparison-stat-label">Cold prefills</span><span class="comparison-stat-value comparison-stat-value--bad">5 / 5</span></div>
-            <div class="comparison-stat"><span class="comparison-stat-label">Wasted compute</span><span class="comparison-stat-value comparison-stat-value--bad">67%</span></div>
+          <div class="use-case anim anim-d4">
+            <div class="use-case-icon blue-bg">
+              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="var(--blue)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
+            </div>
+            <h3>Agentic Workflows</h3>
+            <p>
+              Agent frameworks send parallel requests sharing the same system prompt. First call
+              computes the cache; every subsequent call to the same pod skips system prompt prefill.
+            </p>
+            <div class="use-case-stat">N parallel calls = 1 prefill + (N-1) cache hits</div>
           </div>
-        </div>
-        <div class="comparison-panel comparison-panel--ca reveal reveal-delay-2">
-          <h3>Cache-Aware <span class="comparison-label comparison-label--ca">llm-d</span></h3>
-          <p style="font-size: 0.9rem; color: var(--color-text-secondary); margin-bottom: var(--space-md);">
-            EPP routes all requests with the same prefix to the pod that already has the cache.
-          </p>
-          <div class="comparison-visual" id="caVisual">
-            <div class="mini-pod active"><div>Pod 1</div><div class="mini-cache" id="caCache1"></div></div>
-            <div class="mini-pod"><div>Pod 2</div><div class="mini-cache" id="caCache2"></div></div>
-            <div class="mini-pod"><div>Pod 3</div><div class="mini-cache" id="caCache3"></div></div>
-          </div>
-          <div class="comparison-stats">
-            <div class="comparison-stat"><span class="comparison-stat-label">Cache hits</span><span class="comparison-stat-value comparison-stat-value--good">4 / 5</span></div>
-            <div class="comparison-stat"><span class="comparison-stat-label">Cold prefills</span><span class="comparison-stat-value comparison-stat-value--good">1 / 5</span></div>
-            <div class="comparison-stat"><span class="comparison-stat-label">Wasted compute</span><span class="comparison-stat-value comparison-stat-value--good">0%</span></div>
+          <div class="use-case anim anim-d5">
+            <div class="use-case-icon amber-bg">
+              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="var(--amber)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
+            </div>
+            <h3>Long-Context Documents</h3>
+            <p>
+              Multiple questions about the same document share identical document tokens. A 32K-token
+              document cached means every follow-up skips 32K tokens of prefill.
+            </p>
+            <div class="use-case-stat">32K cached tokens = 3,700ms to 79ms TTFT</div>
           </div>
         </div>
       </div>
     </div>
+
+    <!-- ========== SLIDE 6: COMPARISON ========== -->
+    <div class="slide">
+      <div class="slide-inner">
+        <div class="slide-chapter anim">Chapter Five</div>
+        <h2 class="slide-title anim anim-d1">Round-Robin vs Cache-Aware</h2>
+        <p class="slide-subtitle anim anim-d2">
+          Five requests with the same system prompt hit a 3-pod cluster. Watch the difference.
+        </p>
+        <div class="comparison-slide-layout">
+          <div class="comparison-panel comparison-panel--rr anim anim-d3">
+            <h3>Round-Robin <span class="comp-label comp-label--rr">Baseline</span></h3>
+            <p>Requests scatter across pods. Each pod computes the system prompt KV cache independently.</p>
+            <div class="comp-canvas-wrap">
+              <canvas id="rrCanvas" width="480" height="120"></canvas>
+            </div>
+            <div class="comp-stats">
+              <div class="comp-stat"><span class="comp-stat-label">Cache hits</span><span class="comp-stat-value bad">0 / 5</span></div>
+              <div class="comp-stat"><span class="comp-stat-label">Cold prefills</span><span class="comp-stat-value bad">5 / 5</span></div>
+              <div class="comp-stat"><span class="comp-stat-label">Wasted compute</span><span class="comp-stat-value bad">67%</span></div>
+            </div>
+          </div>
+          <div class="comparison-panel comparison-panel--ca anim anim-d4">
+            <h3>Cache-Aware <span class="comp-label comp-label--ca">llm-d</span></h3>
+            <p>EPP routes all requests with the same prefix to the pod that already has the cache.</p>
+            <div class="comp-canvas-wrap">
+              <canvas id="caCanvas" width="480" height="120"></canvas>
+            </div>
+            <div class="comp-stats">
+              <div class="comp-stat"><span class="comp-stat-label">Cache hits</span><span class="comp-stat-value good">4 / 5</span></div>
+              <div class="comp-stat"><span class="comp-stat-label">Cold prefills</span><span class="comp-stat-value good">1 / 5</span></div>
+              <div class="comp-stat"><span class="comp-stat-label">Wasted compute</span><span class="comp-stat-value good">0%</span></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ========== SLIDE 7: FAQ ========== -->
+    <div class="slide">
+      <div class="slide-inner">
+        <div class="slide-chapter anim">Chapter Six</div>
+        <h2 class="slide-title anim anim-d1">Common Questions</h2>
+        <p class="slide-subtitle anim anim-d2" style="margin-bottom: 0;">
+          From conference halls to Slack channels -- the questions people ask most.
+        </p>
+        <div class="faq-grid">
+          <div class="faq-card anim anim-d3">
+            <h4>Can the cache be shared across pods?</h4>
+            <p>No. The KV cache lives in each pod's GPU memory. Pod A cannot read Pod B's GPU. This is exactly why routing matters -- send the request to the pod that already has it.</p>
+          </div>
+          <div class="faq-card anim anim-d3">
+            <h4>How long does the cache last?</h4>
+            <p>There is no timer. vLLM uses LRU eviction -- blocks persist until GPU memory fills up and pushes out the least-recently-used blocks. Under consistent traffic, caches last indefinitely.</p>
+          </div>
+          <div class="faq-card anim anim-d4">
+            <h4>Does this add latency?</h4>
+            <p>The EPP scoring adds microseconds -- a hash comparison across a small set of pods. The savings from skipping prefill (hundreds of ms to seconds) dwarf the routing cost.</p>
+          </div>
+          <div class="faq-card anim anim-d4">
+            <h4>What if all pods are cold?</h4>
+            <p>The EPP falls back to load-based routing. That first request computes the cache, and all subsequent requests with the same prefix benefit from it.</p>
+          </div>
+          <div class="faq-card anim anim-d5">
+            <h4>Does it work with any model?</h4>
+            <p>Any model served by vLLM with automatic prefix caching enabled (the default). Llama, Mistral, Qwen -- any transformer. The cache operates at the KV block level.</p>
+          </div>
+          <div class="faq-card anim anim-d5">
+            <h4>Do I need to change my app code?</h4>
+            <p>No. Cache-aware routing is a routing-layer optimization. Swap in llm-d as your inference gateway and cache reuse happens automatically -- no SDK changes needed.</p>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ========== SLIDE 8: CLOSING ========== -->
+    <div class="slide">
+      <div class="slide-inner" style="text-align: center;">
+        <div class="slide-chapter anim" style="margin-bottom: 32px;">The Takeaway</div>
+        <div class="closing-quote anim anim-d1">
+          Prefix-cache-aware routing turns a simple observation --
+          that many requests share the same beginning -- into a
+          <span class="highlight">powerful optimization</span> that makes
+          every subsequent request faster.
+        </div>
+        <p class="anim anim-d2" style="font-size: 18px; color: var(--text-secondary); max-width: 660px; margin: 0 auto 40px; line-height: 1.7;">
+          By routing with awareness of what each pod already knows,
+          llm-d transforms redundant GPU compute into instant cache hits.
+          Faster time-to-first-token. Lower cost per request.
+          Infrastructure that gets smarter the more consistent your workloads become.
+        </p>
+        <div class="closing-links anim anim-d3">
+          <a href="https://llm-d.ai" class="closing-link closing-link--primary" target="_blank">
+            What is llm-d?
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg>
+          </a>
+          <a href="https://github.com/llm-d/llm-d" class="closing-link closing-link--outline" target="_blank">
+            <svg width="18" height="18" viewBox="0 0 16 16" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
+            GitHub
+          </a>
+        </div>
+        <div class="closing-footer anim anim-d4">
+          <strong>Markell Rawls</strong> -- AI Evangelist -- Red Hat<br>
+          Demonstrated on Red Hat OpenShift with NVIDIA H200 GPUs -- June 2026
+        </div>
+      </div>
+    </div>
+
   </div>
-</section>
+</div>
 
-<div class="chapter-divider"></div>
+<!-- NAVIGATION -->
+<div class="nav-arrows">
+  <button class="nav-arrow" id="navPrev" disabled>
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="15 18 9 12 15 6"/></svg>
+  </button>
+  <div class="nav-dots" id="navDots"></div>
+  <button class="nav-arrow" id="navNext">
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="9 6 15 12 9 18"/></svg>
+  </button>
+</div>
 
-<!-- ═══════════════════════════════════════════════ -->
-<!-- CHAPTER THREE: The Algorithm                   -->
-<!-- ═══════════════════════════════════════════════ -->
-<section class="chapter diagram-section" id="chapter-3">
-  <div class="container">
-    <div class="chapter-marker reveal">
-      <div class="chapter-number">Chapter Three</div>
-      <h2 class="chapter-title">The Algorithm</h2>
-    </div>
-    <p class="chapter-intro reveal reveal-delay-1">
-      Watch how the EPP routes requests based on cached prefix state.
-      Step through each scenario to see cache hits, misses, and the scoring algorithm at work.
-    </p>
-    <div class="diagram-wrapper reveal reveal-delay-2">
-      <div class="scenario-tabs">
-        <button class="scenario-tab active" data-scenario="cold-start">Cold Start</button>
-        <button class="scenario-tab" data-scenario="cache-hit">Cache Hit</button>
-        <button class="scenario-tab" data-scenario="multi-turn">Multi-Turn</button>
-        <button class="scenario-tab" data-scenario="agentic">Agentic Workflow</button>
-      </div>
-      <div class="diagram-controls" id="diagramControls" style="display: none;">
-        <button id="prevStep">Prev</button>
-        <span class="step-indicator" id="stepIndicator">Step 1 / 4</span>
-        <button id="nextStep">Next</button>
-        <button id="playPause">Play</button>
-      </div>
-      <div class="diagram-canvas" id="diagramCanvas">
-        <div class="start-button-wrapper" id="startOverlay">
-          <button class="start-button" id="startBtn">Watch a Request Get Routed</button>
-        </div>
-        <svg class="diagram-lines" id="diagramLines">
-          <line id="line-epp-pod1" x1="50%" y1="35%" x2="15%" y2="70%"/>
-          <line id="line-epp-pod2" x1="50%" y1="35%" x2="50%" y2="70%"/>
-          <line id="line-epp-pod3" x1="50%" y1="35%" x2="85%" y2="70%"/>
-          <line id="line-req-epp" x1="50%" y1="2%" x2="50%" y2="22%"/>
-        </svg>
-        <div class="request-packet" id="requestPacket">POST /v1/chat</div>
-        <div class="epp-node" id="eppNode" style="left: 50%; top: 22%; transform: translateX(-50%);">
-          <div class="epp-label">llm-d</div>
-          <div class="epp-title">EPP Router</div>
-        </div>
-        <div class="score-badge" id="score1" style="left: 18%; top: 55%;">0 blocks</div>
-        <div class="score-badge" id="score2" style="left: 48%; top: 55%;">0 blocks</div>
-        <div class="score-badge" id="score3" style="left: 78%; top: 55%;">0 blocks</div>
-        <div class="pod" id="pod1" style="left: 5%; top: 62%;">
-          <div class="pod-header"><span>Pod 1 (vLLM)</span><span class="pod-status"></span></div>
-          <div class="cache-blocks" id="cache1"></div>
-        </div>
-        <div class="pod" id="pod2" style="left: 38%; top: 62%;">
-          <div class="pod-header"><span>Pod 2 (vLLM)</span><span class="pod-status"></span></div>
-          <div class="cache-blocks" id="cache2"></div>
-        </div>
-        <div class="pod" id="pod3" style="left: 71%; top: 62%;">
-          <div class="pod-header"><span>Pod 3 (vLLM)</span><span class="pod-status"></span></div>
-          <div class="cache-blocks" id="cache3"></div>
-        </div>
-      </div>
-      <div class="diagram-narration" id="narration">
-        Select a scenario above and press the button to begin. Each scenario shows a different routing pattern.
-      </div>
-      <div class="keyboard-hint">Use <kbd>&larr;</kbd> <kbd>&rarr;</kbd> arrow keys or <kbd>Space</kbd> to step through</div>
-    </div>
-  </div>
-</section>
-
-<div class="chapter-divider"></div>
-
-<!-- ═══════════════════════════════════════════════ -->
-<!-- CHAPTER FOUR: The Impact                       -->
-<!-- ═══════════════════════════════════════════════ -->
-<section class="chapter" id="chapter-4">
-  <div class="container">
-    <div class="chapter-marker reveal">
-      <div class="chapter-number">Chapter Four</div>
-      <h2 class="chapter-title">The Impact</h2>
-    </div>
-    <p class="chapter-intro reveal reveal-delay-1">
-      Four steps from request to routed response. The EPP makes this decision in microseconds,
-      before the request ever reaches a vLLM pod.
-    </p>
-
-    <div class="steps-grid" style="margin-top: var(--space-2xl);">
-      <div class="step-card reveal reveal-delay-1">
-        <div class="step-number">1</div>
-        <h3>Request Arrives</h3>
-        <p>A chat completion request hits the Gateway API. The EPP intercepts it and extracts the token prefix -- the sequence of tokens that make up the prompt (system message + conversation history).</p>
-      </div>
-      <div class="step-card reveal reveal-delay-2">
-        <div class="step-number">2</div>
-        <h3>Query Cache State</h3>
-        <p>The EPP maintains a near-real-time map of what each pod has cached. It checks every replica's cached prefix blocks against the incoming request's token sequence.</p>
-      </div>
-      <div class="step-card reveal reveal-delay-3">
-        <div class="step-number">3</div>
-        <h3>Score by Overlap</h3>
-        <p>Each pod gets a score based on the longest prefix match -- how many contiguous token blocks from the start of the request are already in that pod's KV cache. More blocks matched = higher score.</p>
-      </div>
-      <div class="step-card reveal reveal-delay-4">
-        <div class="step-number">4</div>
-        <h3>Route to Best Match</h3>
-        <p>The request is routed to the highest-scoring pod. On a full cache hit, the pod skips the entire prefill phase -- it already has the attention states computed and goes straight to generating new tokens.</p>
-      </div>
-    </div>
-
-    <!-- FAQ -->
-    <div style="margin-top: var(--space-3xl);">
-      <h3 style="font-family: var(--font-serif); font-size: var(--font-size-xl); font-weight: 600; margin-bottom: var(--space-sm); text-align: center;" class="reveal">Common Questions</h3>
-      <p style="text-align: center; color: var(--color-text-secondary); margin-bottom: var(--space-xl); max-width: 720px; margin-left: auto; margin-right: auto;" class="reveal reveal-delay-1">
-        The questions people ask most about prefix-cache-aware routing --
-        from conference halls to Slack channels.
-      </p>
-      <div class="faq-grid">
-        <div class="faq-item reveal reveal-delay-1">
-          <h3>Can the cache be shared across pods?</h3>
-          <p>No. The KV cache lives in each pod's GPU memory -- Pod A cannot read blocks from Pod B's GPU. This is exactly why routing matters: if you cannot share the cache, send the request to the pod that already has it.</p>
-        </div>
-        <div class="faq-item reveal reveal-delay-2">
-          <h3>What happens when a pod restarts?</h3>
-          <p>Its cache is gone. New pods start cold. The EPP discovers them automatically and routes based on load until they build up cache. Existing pods keep their warm caches while new ones ramp up.</p>
-        </div>
-        <div class="faq-item reveal reveal-delay-1">
-          <h3>Does this add latency?</h3>
-          <p>The EPP scoring adds microseconds -- it is a hash comparison across a small set of pods. The routing cost is invisible. The savings from skipping prefill (hundreds of ms to seconds) are not.</p>
-        </div>
-        <div class="faq-item reveal reveal-delay-2">
-          <h3>Does it work with any model?</h3>
-          <p>Any model served by vLLM with automatic prefix caching enabled (the default). Llama, Mistral, Qwen, Falcon -- any transformer. The cache operates at the KV block level, a property of attention, not specific model weights.</p>
-        </div>
-        <div class="faq-item reveal reveal-delay-1">
-          <h3>What is the minimum prefix length?</h3>
-          <p>vLLM caches in blocks of 16 tokens. You need at least 16 shared tokens to see a hit. In practice, even a short system prompt like "You are a helpful assistant" exceeds this once tokenized.</p>
-        </div>
-        <div class="faq-item reveal reveal-delay-2">
-          <h3>What about different system prompts?</h3>
-          <p>They cache independently. User A's requests cluster on one pod, User B's may cluster on another. Multiple distinct caches coexist on a single pod as long as GPU memory allows.</p>
-        </div>
-        <div class="faq-item reveal reveal-delay-1">
-          <h3>What if all pods are cold?</h3>
-          <p>The EPP falls back to load-based routing -- fewest active requests wins. That first request computes the cache, and all subsequent requests with the same prefix benefit from it.</p>
-        </div>
-        <div class="faq-item reveal reveal-delay-2">
-          <h3>Does it work with LoRA adapters?</h3>
-          <p>Yes. Prefix caching operates on the base model's KV blocks. LoRA modifies weights but the caching mechanism is the same. Requests with the same base prefix still get cache hits regardless of which adapter is applied.</p>
-        </div>
-        <div class="faq-item reveal reveal-delay-1">
-          <h3>How much GPU memory does the cache use?</h3>
-          <p>vLLM uses whatever GPU memory is not active for inference -- no separate allocation or config. On an H200 with 141GB serving a 70B model in FP8 (~70GB), there is substantial room for cached blocks. vLLM manages this automatically.</p>
-        </div>
-        <div class="faq-item reveal reveal-delay-2">
-          <h3>Do I need to change my application code?</h3>
-          <p>No. Cache-aware routing is a routing-layer optimization. Your prompts, model, and application stay the same. Swap in llm-d as your inference gateway and cache reuse happens automatically -- no SDK changes, no prompt modifications.</p>
-        </div>
-      </div>
-    </div>
-
-    <p class="concluding-narrative reveal">
-      Prefix-cache-aware routing turns a simple observation -- that many requests share the same beginning --
-      into a powerful optimization. By routing with awareness of what each pod already knows,
-      llm-d transforms redundant GPU compute into instant cache hits.
-      The result is faster time-to-first-token, lower cost per request,
-      and infrastructure that gets smarter the more consistent your workloads become.
-    </p>
-  </div>
-</section>
-
-<footer class="site-footer">
-  <div class="container">
-    <div class="footer-content">
-      <div class="footer-links">
-        <a href="https://llm-d.ai" target="_blank">llm-d.ai</a>
-        <a href="https://github.com/llm-d/llm-d" target="_blank">GitHub</a>
-        <a href="https://cloud.redhat.com/blog/tag/llm-d" target="_blank">Red Hat Blog</a>
-      </div>
-      <div class="footer-author">Markell Rawls -- Developer Advocate -- Red Hat</div>
-      <div class="footer-meta">Demonstrated on Red Hat OpenShift with NVIDIA H200 GPUs -- June 2026</div>
-    </div>
-  </div>
-</footer>
+<div class="keyboard-hint">
+  <kbd>&larr;</kbd> <kbd>&rarr;</kbd> arrow keys or click to navigate
+</div>
 
 <script>
-(function () {
+(function() {
   'use strict';
 
-  // -- Scroll progress bar --
-  function initScrollProgress() {
-    var bar = document.querySelector('.scroll-progress');
-    if (!bar) return;
-    window.addEventListener('scroll', function () {
-      var scrollTop = window.pageYOffset || document.documentElement.scrollTop;
-      var docHeight = document.documentElement.scrollHeight - window.innerHeight;
-      var pct = docHeight > 0 ? (scrollTop / docHeight) * 100 : 0;
-      bar.style.width = pct + '%';
-    }, { passive: true });
+  // =========================================
+  // SLIDE NAVIGATION
+  // =========================================
+  var track = document.getElementById('slidesTrack');
+  var slides = track.querySelectorAll('.slide');
+  var totalSlides = slides.length;
+  var currentSlide = 0;
+  var isAnimating = false;
+
+  var prevBtn = document.getElementById('navPrev');
+  var nextBtn = document.getElementById('navNext');
+  var dotsContainer = document.getElementById('navDots');
+  var progressBar = document.getElementById('progressBar');
+  var counterEl = document.getElementById('slideCounter');
+
+  // Create dots
+  for (var i = 0; i < totalSlides; i++) {
+    var dot = document.createElement('button');
+    dot.className = 'nav-dot' + (i === 0 ? ' active' : '');
+    dot.dataset.index = i;
+    dotsContainer.appendChild(dot);
+  }
+  var dots = dotsContainer.querySelectorAll('.nav-dot');
+
+  function goToSlide(index) {
+    if (index < 0 || index >= totalSlides || isAnimating) return;
+    isAnimating = true;
+    var prevSlide = currentSlide;
+    currentSlide = index;
+
+    track.style.transform = 'translateX(-' + (currentSlide * 100) + '%)';
+
+    // Update active states
+    slides[prevSlide].removeAttribute('data-active');
+    slides[currentSlide].setAttribute('data-active', 'true');
+
+    // Update dots
+    dots.forEach(function(d, di) {
+      d.classList.toggle('active', di === currentSlide);
+    });
+
+    // Update buttons
+    prevBtn.disabled = currentSlide === 0;
+    nextBtn.disabled = currentSlide === totalSlides - 1;
+
+    // Update counter
+    counterEl.textContent = (currentSlide + 1) + ' / ' + totalSlides;
+
+    // Update progress bar
+    var pct = ((currentSlide) / (totalSlides - 1)) * 100;
+    progressBar.style.width = pct + '%';
+
+    // Trigger slide-specific animations
+    triggerSlideAnimation(currentSlide);
+
+    setTimeout(function() { isAnimating = false; }, 750);
   }
 
-  // -- Stat count-up animation --
-  function initCountUp() {
-    var statEls = document.querySelectorAll('.stat-value[data-count]');
-    if (!('IntersectionObserver' in window)) return;
-    var observer = new IntersectionObserver(function (entries) {
-      entries.forEach(function (entry) {
-        if (entry.isIntersecting) {
-          var el = entry.target;
-          var target = parseFloat(el.dataset.count);
-          var suffix = el.dataset.suffix || '';
-          var isFloat = target % 1 !== 0;
-          var duration = 1200;
-          var start = performance.now();
-          function tick(now) {
-            var elapsed = now - start;
-            var progress = Math.min(elapsed / duration, 1);
-            var eased = 1 - Math.pow(1 - progress, 3);
-            var current = eased * target;
-            el.textContent = (isFloat ? current.toFixed(1) : Math.round(current)) + suffix;
-            if (progress < 1) requestAnimationFrame(tick);
+  prevBtn.addEventListener('click', function() { goToSlide(currentSlide - 1); });
+  nextBtn.addEventListener('click', function() { goToSlide(currentSlide + 1); });
+
+  dots.forEach(function(dot) {
+    dot.addEventListener('click', function() {
+      goToSlide(parseInt(this.dataset.index));
+    });
+  });
+
+  // Keyboard
+  document.addEventListener('keydown', function(e) {
+    if (e.key === 'ArrowRight' || e.key === 'Right') { e.preventDefault(); goToSlide(currentSlide + 1); }
+    if (e.key === 'ArrowLeft' || e.key === 'Left') { e.preventDefault(); goToSlide(currentSlide - 1); }
+    if (e.key === ' ') { e.preventDefault(); goToSlide(currentSlide + 1); }
+  });
+
+  // =========================================
+  // HERO CANVAS -- Animated pods orbiting
+  // =========================================
+  var heroCanvas = document.getElementById('heroCanvas');
+  var heroCtx = heroCanvas ? heroCanvas.getContext('2d') : null;
+  var heroAnimId = null;
+
+  function initHeroCanvas() {
+    if (!heroCtx) return;
+    var dpr = window.devicePixelRatio || 1;
+    heroCanvas.width = 420 * dpr;
+    heroCanvas.height = 420 * dpr;
+    heroCtx.scale(dpr, dpr);
+
+    var pods = [
+      { angle: 0, radius: 140, size: 40, label: 'Pod 1', color: '#2e8b57', cacheBlocks: 6 },
+      { angle: 2.1, radius: 140, size: 36, label: 'Pod 2', color: '#3a7bd5', cacheBlocks: 2 },
+      { angle: 4.2, radius: 140, size: 34, label: 'Pod 3', color: '#d4910a', cacheBlocks: 0 }
+    ];
+    var cx = 210, cy = 210;
+    var particles = [];
+    for (var p = 0; p < 20; p++) {
+      particles.push({
+        angle: Math.random() * Math.PI * 2,
+        radius: 60 + Math.random() * 120,
+        speed: 0.003 + Math.random() * 0.008,
+        size: 2 + Math.random() * 3,
+        opacity: 0.15 + Math.random() * 0.35
+      });
+    }
+
+    function drawHero(time) {
+      heroCtx.clearRect(0, 0, 420, 420);
+
+      // Draw orbit ring
+      heroCtx.beginPath();
+      heroCtx.arc(cx, cy, 140, 0, Math.PI * 2);
+      heroCtx.strokeStyle = 'rgba(232, 226, 218, 0.5)';
+      heroCtx.lineWidth = 1.5;
+      heroCtx.setLineDash([6, 4]);
+      heroCtx.stroke();
+      heroCtx.setLineDash([]);
+
+      // EPP center node
+      heroCtx.beginPath();
+      heroCtx.arc(cx, cy, 32, 0, Math.PI * 2);
+      var eppGrad = heroCtx.createRadialGradient(cx, cy, 0, cx, cy, 32);
+      eppGrad.addColorStop(0, '#7b5ea7');
+      eppGrad.addColorStop(1, '#9474c2');
+      heroCtx.fillStyle = eppGrad;
+      heroCtx.fill();
+
+      heroCtx.fillStyle = '#fff';
+      heroCtx.font = '600 11px "Red Hat Display"';
+      heroCtx.textAlign = 'center';
+      heroCtx.textBaseline = 'middle';
+      heroCtx.fillText('EPP', cx, cy);
+
+      // Particles floating
+      particles.forEach(function(pt) {
+        pt.angle += pt.speed;
+        var px = cx + Math.cos(pt.angle) * pt.radius;
+        var py = cy + Math.sin(pt.angle) * pt.radius;
+        heroCtx.beginPath();
+        heroCtx.arc(px, py, pt.size, 0, Math.PI * 2);
+        heroCtx.fillStyle = 'rgba(212, 145, 10, ' + pt.opacity + ')';
+        heroCtx.fill();
+      });
+
+      // Pods
+      pods.forEach(function(pod, idx) {
+        pod.angle += 0.005;
+        var px = cx + Math.cos(pod.angle) * pod.radius;
+        var py = cy + Math.sin(pod.angle) * pod.radius;
+
+        // Connection line to center
+        heroCtx.beginPath();
+        heroCtx.moveTo(cx, cy);
+        heroCtx.lineTo(px, py);
+        heroCtx.strokeStyle = pod.cacheBlocks > 0 ?
+          'rgba(46, 139, 87, 0.3)' : 'rgba(232, 226, 218, 0.4)';
+        heroCtx.lineWidth = pod.cacheBlocks > 0 ? 2 : 1;
+        heroCtx.stroke();
+
+        // Pod circle
+        heroCtx.beginPath();
+        heroCtx.arc(px, py, pod.size, 0, Math.PI * 2);
+        heroCtx.fillStyle = '#ffffff';
+        heroCtx.fill();
+        heroCtx.strokeStyle = pod.color;
+        heroCtx.lineWidth = 2.5;
+        heroCtx.stroke();
+
+        // Cache fill indicator
+        if (pod.cacheBlocks > 0) {
+          var fillAngle = (pod.cacheBlocks / 8) * Math.PI * 2;
+          heroCtx.beginPath();
+          heroCtx.moveTo(px, py);
+          heroCtx.arc(px, py, pod.size - 6, -Math.PI / 2, -Math.PI / 2 + fillAngle);
+          heroCtx.closePath();
+          heroCtx.fillStyle = pod.color + '33';
+          heroCtx.fill();
+        }
+
+        heroCtx.fillStyle = '#2d2a26';
+        heroCtx.font = '600 10px "Red Hat Display"';
+        heroCtx.textAlign = 'center';
+        heroCtx.textBaseline = 'middle';
+        heroCtx.fillText(pod.label, px, py);
+      });
+
+      heroAnimId = requestAnimationFrame(drawHero);
+    }
+    drawHero(0);
+  }
+
+  // =========================================
+  // ROUTING ANIMATION CANVAS (Slide 3)
+  // =========================================
+  var routingCanvas = document.getElementById('routingCanvas');
+  var routingCtx = routingCanvas ? routingCanvas.getContext('2d') : null;
+  var routingAnimId = null;
+  var routingStartTime = 0;
+  var routingActive = false;
+
+  function initRoutingCanvas() {
+    if (!routingCtx) return;
+    var rect = routingCanvas.parentElement.getBoundingClientRect();
+    var dpr = window.devicePixelRatio || 1;
+    routingCanvas.width = rect.width * dpr;
+    routingCanvas.height = rect.height * dpr;
+    routingCanvas.style.width = rect.width + 'px';
+    routingCanvas.style.height = rect.height + 'px';
+    routingCtx.scale(dpr, dpr);
+  }
+
+  var routingPhase = 0;
+  var ROUTING_NARRATIONS = [
+    'A new request arrives at the EPP. The router intercepts and extracts the token prefix...',
+    'The EPP queries each pod\'s cache state. Pod 1 has 4 matching blocks, Pod 2 has 0, Pod 3 has 0.',
+    'Pod 1 scores highest -- 4 prefix blocks match. The EPP routes the request to Pod 1.',
+    'Cache hit! Pod 1 skips the entire prefill phase. Only new tokens need computing. TTFT drops from seconds to milliseconds.',
+    'The cache grows. Pod 1 now holds 5 blocks. The next request with this prefix will be even faster.',
+    'A new request arrives with the same system prompt. The EPP immediately scores Pod 1 highest again.',
+    'Routed to Pod 1 -- another cache hit. Zero redundant GPU compute. The system gets smarter over time.'
+  ];
+
+  function drawRouting(time) {
+    if (!routingActive) return;
+    var w = routingCanvas.width / (window.devicePixelRatio || 1);
+    var h = routingCanvas.height / (window.devicePixelRatio || 1);
+    var elapsed = (time - routingStartTime) / 1000;
+
+    routingCtx.clearRect(0, 0, w, h);
+
+    var cx = w / 2;
+    var eppY = h * 0.32;
+    var podY = h * 0.62;
+    var podSpacing = Math.min(w * 0.28, 240);
+    var podPositions = [
+      { x: cx - podSpacing, y: podY },
+      { x: cx, y: podY },
+      { x: cx + podSpacing, y: podY }
+    ];
+
+    var phaseTime = elapsed % 5;
+    var phase = Math.floor(elapsed / 5) % ROUTING_NARRATIONS.length;
+    if (phase !== routingPhase) {
+      routingPhase = phase;
+      var narEl = document.getElementById('routingNarration');
+      if (narEl) {
+        narEl.style.opacity = '0';
+        setTimeout(function() {
+          narEl.textContent = ROUTING_NARRATIONS[routingPhase];
+          narEl.style.opacity = '1';
+        }, 200);
+      }
+    }
+
+    // Draw connection lines (dashed)
+    routingCtx.setLineDash([6, 4]);
+    routingCtx.strokeStyle = 'rgba(232, 226, 218, 0.6)';
+    routingCtx.lineWidth = 1.5;
+    podPositions.forEach(function(pos) {
+      routingCtx.beginPath();
+      routingCtx.moveTo(cx, eppY + 30);
+      routingCtx.lineTo(pos.x, pos.y - 40);
+      routingCtx.stroke();
+    });
+    routingCtx.setLineDash([]);
+
+    // Active routing line to Pod 1
+    if (phaseTime > 1.5 && phaseTime < 4.5) {
+      var lineProgress = Math.min((phaseTime - 1.5) / 0.8, 1);
+      var lineEndX = cx + (podPositions[0].x - cx) * lineProgress;
+      var lineEndY = eppY + 30 + (podPositions[0].y - 40 - eppY - 30) * lineProgress;
+      routingCtx.beginPath();
+      routingCtx.moveTo(cx, eppY + 30);
+      routingCtx.lineTo(lineEndX, lineEndY);
+      routingCtx.strokeStyle = 'rgba(46, 139, 87, 0.8)';
+      routingCtx.lineWidth = 3;
+      routingCtx.shadowColor = 'rgba(46, 139, 87, 0.4)';
+      routingCtx.shadowBlur = 10;
+      routingCtx.stroke();
+      routingCtx.shadowBlur = 0;
+    }
+
+    // EPP node
+    var eppW = 120, eppH = 56;
+    routingCtx.beginPath();
+    var eppRad = 14;
+    routingCtx.moveTo(cx - eppW / 2 + eppRad, eppY - eppH / 2);
+    routingCtx.arcTo(cx + eppW / 2, eppY - eppH / 2, cx + eppW / 2, eppY + eppH / 2, eppRad);
+    routingCtx.arcTo(cx + eppW / 2, eppY + eppH / 2, cx - eppW / 2, eppY + eppH / 2, eppRad);
+    routingCtx.arcTo(cx - eppW / 2, eppY + eppH / 2, cx - eppW / 2, eppY - eppH / 2, eppRad);
+    routingCtx.arcTo(cx - eppW / 2, eppY - eppH / 2, cx + eppW / 2, eppY - eppH / 2, eppRad);
+    routingCtx.closePath();
+
+    var eppGrad = routingCtx.createLinearGradient(cx - eppW / 2, eppY, cx + eppW / 2, eppY);
+    eppGrad.addColorStop(0, '#7b5ea7');
+    eppGrad.addColorStop(1, '#9474c2');
+    routingCtx.fillStyle = eppGrad;
+    routingCtx.shadowColor = 'rgba(123, 94, 167, 0.3)';
+    routingCtx.shadowBlur = 16;
+    routingCtx.fill();
+    routingCtx.shadowBlur = 0;
+
+    routingCtx.fillStyle = 'rgba(255,255,255,0.7)';
+    routingCtx.font = '500 11px "Red Hat Display"';
+    routingCtx.textAlign = 'center';
+    routingCtx.textBaseline = 'middle';
+    routingCtx.fillText('llm-d', cx, eppY - 8);
+    routingCtx.fillStyle = '#ffffff';
+    routingCtx.font = '700 14px "Red Hat Display"';
+    routingCtx.fillText('EPP Router', cx, eppY + 10);
+
+    // Request packet flying in
+    if (phaseTime < 2) {
+      var reqProgress = Math.min(phaseTime / 1.2, 1);
+      var reqY = h * 0.08 + (eppY - h * 0.08 - 40) * easeOutCubic(reqProgress);
+      routingCtx.beginPath();
+      var rw = 140, rh = 28;
+      routingCtx.roundRect(cx - rw / 2, reqY - rh / 2, rw, rh, 8);
+      routingCtx.fillStyle = 'rgba(58, 123, 213, ' + (1 - reqProgress * 0.3) + ')';
+      routingCtx.fill();
+      routingCtx.fillStyle = '#fff';
+      routingCtx.font = '600 11px "Red Hat Text"';
+      routingCtx.fillText('POST /v1/chat', cx, reqY + 1);
+    }
+
+    // Draw pods
+    var podLabels = ['Pod 1', 'Pod 2', 'Pod 3'];
+    var podCaches = [
+      phase < 4 ? 4 : 5,
+      0,
+      0
+    ];
+    var podColors = ['#2e8b57', '#3a7bd5', '#d4910a'];
+
+    podPositions.forEach(function(pos, idx) {
+      var pw = 150, ph = 80;
+      var isHighlighted = idx === 0 && phaseTime > 1.5;
+
+      // Pod card
+      routingCtx.beginPath();
+      routingCtx.roundRect(pos.x - pw / 2, pos.y - ph / 2, pw, ph, 14);
+      routingCtx.fillStyle = '#ffffff';
+      if (isHighlighted) {
+        routingCtx.shadowColor = 'rgba(46, 139, 87, 0.25)';
+        routingCtx.shadowBlur = 20;
+      }
+      routingCtx.fill();
+      routingCtx.shadowBlur = 0;
+      routingCtx.strokeStyle = isHighlighted ? '#2e8b57' : '#e8e2da';
+      routingCtx.lineWidth = isHighlighted ? 2.5 : 1.5;
+      routingCtx.stroke();
+
+      // Pod label
+      routingCtx.fillStyle = '#2d2a26';
+      routingCtx.font = '700 13px "Red Hat Display"';
+      routingCtx.textAlign = 'center';
+      routingCtx.fillText(podLabels[idx], pos.x, pos.y - 18);
+
+      // Status dot
+      routingCtx.beginPath();
+      routingCtx.arc(pos.x + pw / 2 - 18, pos.y - 26, 4, 0, Math.PI * 2);
+      routingCtx.fillStyle = '#2e8b57';
+      routingCtx.fill();
+
+      // Cache blocks
+      var blockSize = 14;
+      var blockGap = 3;
+      var totalBlocks = 8;
+      var startX = pos.x - ((totalBlocks * (blockSize + blockGap) - blockGap) / 2);
+      for (var b = 0; b < totalBlocks; b++) {
+        var bx = startX + b * (blockSize + blockGap);
+        var by = pos.y + 4;
+        routingCtx.beginPath();
+        routingCtx.roundRect(bx, by, blockSize, blockSize, 3);
+        if (b < podCaches[idx]) {
+          routingCtx.fillStyle = podColors[idx];
+          if (isHighlighted && phaseTime > 2 && b < podCaches[idx]) {
+            var pulseScale = 1 + 0.15 * Math.sin(time / 200 + b * 0.5);
+            routingCtx.save();
+            routingCtx.translate(bx + blockSize / 2, by + blockSize / 2);
+            routingCtx.scale(pulseScale, pulseScale);
+            routingCtx.translate(-(bx + blockSize / 2), -(by + blockSize / 2));
+            routingCtx.fill();
+            routingCtx.restore();
+            continue;
           }
-          requestAnimationFrame(tick);
-          observer.unobserve(el);
+        } else {
+          routingCtx.fillStyle = '#f0ebe4';
         }
-      });
-    }, { threshold: 0.5 });
-    statEls.forEach(function (el) { observer.observe(el); });
-  }
-
-  // -- Scenario definitions --
-  var SCENARIOS = {
-    'cold-start': {
-      title: 'Cold Start',
-      steps: [
-        {
-          narration: 'A user sends their first chat request. The EPP receives the request and checks all pods for cached prefix blocks.',
-          request: 'POST /v1/chat -- "You are a helpful assistant. What is Kubernetes?"',
-          scores: [0, 0, 0], scoreLabels: ['0 blocks', '0 blocks', '0 blocks'], scoreClasses: ['zero', 'zero', 'zero'],
-          routeTo: null, caches: [[], [], []], activeLines: ['req-epp'], podStates: ['', '', '']
-        },
-        {
-          narration: 'No pod has any cached blocks -- all scores are zero. The EPP picks Pod 1 (lowest load). This will be a cold start -- full prefill computation required.',
-          request: null, scores: [0, 0, 0], scoreLabels: ['0 blocks', '0 blocks', '0 blocks'], scoreClasses: ['zero', 'zero', 'zero'],
-          routeTo: null, caches: [[], [], []], activeLines: [], podStates: ['', '', '']
-        },
-        {
-          narration: 'The EPP routes the request to Pod 1. Pod 1 computes the full KV cache from scratch -- system prompt + user message. This takes ~3,700ms at 32K tokens.',
-          request: null, scores: null, routeTo: 1, caches: [[], [], []], activeLines: ['epp-pod1'], podStates: ['highlighted', '', '']
-        },
-        {
-          narration: 'Pod 1 finishes prefill and stores the computed KV cache blocks. These blocks are now available for future requests with the same prefix. The EPP updates its cache state map.',
-          request: null, scores: null, routeTo: null,
-          caches: [['S', 'S', 'S', 'S', 'U'], [], []], cacheClasses: [['filled', 'filled', 'filled', 'filled', 'new'], [], []],
-          activeLines: [], podStates: ['highlighted', '', '']
-        }
-      ]
-    },
-    'cache-hit': {
-      title: 'Cache Hit',
-      steps: [
-        {
-          narration: 'Pod 1 has cached blocks from the previous request (system prompt). A new request arrives with the same system prompt but a different user question.',
-          request: 'POST /v1/chat -- "You are a helpful assistant. Explain containers."',
-          scores: null, caches: [['S', 'S', 'S', 'S'], [], []], cacheClasses: [['filled', 'filled', 'filled', 'filled'], [], []],
-          activeLines: ['req-epp'], podStates: ['', '', '']
-        },
-        {
-          narration: 'The EPP computes prefix overlap: Pod 1 has 4 blocks matching the system prompt prefix. Pods 2 and 3 have nothing. Pod 1 scores highest.',
-          request: null, scores: [4, 0, 0], scoreLabels: ['4 blocks', '0 blocks', '0 blocks'], scoreClasses: ['high', 'zero', 'zero'],
-          caches: [['S', 'S', 'S', 'S'], [], []], cacheClasses: [['match', 'match', 'match', 'match'], [], []],
-          activeLines: [], podStates: ['highlighted', '', '']
-        },
-        {
-          narration: 'The EPP routes to Pod 1 -- the only pod with a cache match. Pod 1 skips the system prompt prefill entirely and only computes the new user message tokens.',
-          request: null, scores: null, routeTo: 1,
-          caches: [['S', 'S', 'S', 'S'], [], []], cacheClasses: [['match', 'match', 'match', 'match'], [], []],
-          activeLines: ['epp-pod1'], podStates: ['highlighted', '', '']
-        },
-        {
-          narration: 'Cache hit! Pod 1 reused 4 blocks of cached computation. Only the new user question needed prefilling -- a fraction of the total work. TTFT drops from seconds to milliseconds.',
-          request: null, scores: null, routeTo: null,
-          caches: [['S', 'S', 'S', 'S', 'U'], [], []], cacheClasses: [['filled', 'filled', 'filled', 'filled', 'new'], [], []],
-          activeLines: [], podStates: ['highlighted', '', '']
-        }
-      ]
-    },
-    'multi-turn': {
-      title: 'Multi-Turn Conversation',
-      steps: [
-        {
-          narration: 'Turn 1 completed on Pod 1: system prompt + first Q&A are cached (6 blocks). Now the user sends Turn 2 -- the prompt includes all of Turn 1 as prefix.',
-          request: 'Turn 2: "You are a helpful assistant. [Turn 1 Q&A] Follow-up question..."',
-          scores: null, caches: [['S', 'S', 'Q', 'A', 'Q', 'A'], [], ['S', 'S']],
-          cacheClasses: [['filled', 'filled', 'filled', 'filled', 'filled', 'filled'], [], ['filled', 'filled']],
-          activeLines: ['req-epp'], podStates: ['', '', '']
-        },
-        {
-          narration: 'EPP scores each pod: Pod 1 has 6 blocks matching the full Turn 1 prefix. Pod 3 has only 2 blocks (just the system prompt). Pod 2 has nothing. Pod 1 wins by a wide margin.',
-          request: null, scores: [6, 0, 2], scoreLabels: ['6 blocks', '0 blocks', '2 blocks'], scoreClasses: ['high', 'zero', 'low'],
-          caches: [['S', 'S', 'Q', 'A', 'Q', 'A'], [], ['S', 'S']],
-          cacheClasses: [['match', 'match', 'match', 'match', 'match', 'match'], [], ['filled', 'filled']],
-          activeLines: [], podStates: ['highlighted', '', '']
-        },
-        {
-          narration: 'Routed to Pod 1. It skips all 6 cached blocks and only prefills the new Turn 2 question. Each additional turn compounds the savings -- more cached prefix = less new compute.',
-          request: null, scores: null, routeTo: 1,
-          caches: [['S', 'S', 'Q', 'A', 'Q', 'A'], [], ['S', 'S']],
-          cacheClasses: [['match', 'match', 'match', 'match', 'match', 'match'], [], ['filled', 'filled']],
-          activeLines: ['epp-pod1'], podStates: ['highlighted', '', '']
-        },
-        {
-          narration: 'Turn 2 done. Pod 1 now has 8 blocks cached -- the entire conversation history. Turn 3 will reuse all 8 blocks. Each turn gets faster as the cached prefix grows longer.',
-          request: null, scores: null, routeTo: null,
-          caches: [['S', 'S', 'Q', 'A', 'Q', 'A', 'Q', 'A'], [], ['S', 'S']],
-          cacheClasses: [['filled', 'filled', 'filled', 'filled', 'filled', 'filled', 'new', 'new'], [], ['filled', 'filled']],
-          activeLines: [], podStates: ['highlighted', '', '']
-        }
-      ]
-    },
-    'agentic': {
-      title: 'Agentic Workflow',
-      steps: [
-        {
-          narration: 'An AI agent sends 3 parallel tool calls -- all sharing the same system prompt. The first call arrives and computes the full cache on Pod 1.',
-          request: 'Agent Call 1: "You are a code assistant. [system prompt] Run unit tests"',
-          scores: null, caches: [[], [], []], activeLines: ['req-epp', 'epp-pod1'], podStates: ['highlighted', '', '']
-        },
-        {
-          narration: 'Pod 1 now has the system prompt cached (4 blocks). Agent Calls 2 and 3 arrive simultaneously -- both with the same system prompt prefix.',
-          request: 'Agent Calls 2 & 3: same system prompt + different tool instructions',
-          scores: [4, 0, 0], scoreLabels: ['4 blocks', '0 blocks', '0 blocks'], scoreClasses: ['high', 'zero', 'zero'],
-          caches: [['S', 'S', 'S', 'S'], [], []], cacheClasses: [['match', 'match', 'match', 'match'], [], []],
-          activeLines: [], podStates: ['highlighted', '', '']
-        },
-        {
-          narration: 'EPP routes both remaining calls to Pod 1 -- it has the highest prefix match score. Both calls skip the system prompt prefill entirely. Only the unique tool instructions need computing.',
-          request: null, scores: null, routeTo: 1,
-          caches: [['S', 'S', 'S', 'S'], [], []], cacheClasses: [['match', 'match', 'match', 'match'], [], []],
-          activeLines: ['epp-pod1'], podStates: ['highlighted', '', '']
-        },
-        {
-          narration: '3 parallel calls completed: 1 cold prefill + 2 cache hits. Without cache-aware routing, all 3 would have been cold starts on different pods. The system prompt compute happened once instead of three times.',
-          request: null, scores: null, routeTo: null,
-          caches: [['S', 'S', 'S', 'S', 'T', 'T', 'T'], [], []],
-          cacheClasses: [['filled', 'filled', 'filled', 'filled', 'new', 'new', 'new'], [], ['empty', 'empty']],
-          activeLines: [], podStates: ['highlighted', '', '']
-        }
-      ]
-    }
-  };
-
-  var currentScenario = 'cold-start';
-  var currentStep = 0;
-  var isPlaying = false;
-  var playTimer = null;
-  var hasStarted = false;
-
-  var narrationEl = document.getElementById('narration');
-  var stepIndicatorEl = document.getElementById('stepIndicator');
-  var requestPacketEl = document.getElementById('requestPacket');
-  var prevBtn = document.getElementById('prevStep');
-  var nextBtn = document.getElementById('nextStep');
-  var playPauseBtn = document.getElementById('playPause');
-  var diagramControls = document.getElementById('diagramControls');
-  var startOverlay = document.getElementById('startOverlay');
-  var startBtn = document.getElementById('startBtn');
-
-  var cacheEls = [document.getElementById('cache1'), document.getElementById('cache2'), document.getElementById('cache3')];
-  var podEls = [document.getElementById('pod1'), document.getElementById('pod2'), document.getElementById('pod3')];
-  var scoreEls = [document.getElementById('score1'), document.getElementById('score2'), document.getElementById('score3')];
-  var lineEls = {
-    'req-epp': document.getElementById('line-req-epp'),
-    'epp-pod1': document.getElementById('line-epp-pod1'),
-    'epp-pod2': document.getElementById('line-epp-pod2'),
-    'epp-pod3': document.getElementById('line-epp-pod3')
-  };
-
-  function showDiagramStarted() {
-    hasStarted = true;
-    startOverlay.classList.add('hidden');
-    diagramControls.style.display = 'flex';
-  }
-
-  function renderStep() {
-    var scenario = SCENARIOS[currentScenario];
-    var step = scenario.steps[currentStep];
-    stepIndicatorEl.textContent = 'Step ' + (currentStep + 1) + ' / ' + scenario.steps.length;
-
-    narrationEl.style.opacity = '0';
-    setTimeout(function () {
-      narrationEl.textContent = step.narration;
-      narrationEl.style.opacity = '1';
-    }, 150);
-
-    if (step.request) {
-      requestPacketEl.textContent = step.request.length > 60 ? step.request.substring(0, 60) + '...' : step.request;
-      requestPacketEl.classList.add('visible');
-      requestPacketEl.style.left = '50%';
-      requestPacketEl.style.top = '0';
-      requestPacketEl.style.transform = 'translateX(-50%)';
-    } else {
-      requestPacketEl.classList.remove('visible');
-    }
-
-    Object.keys(lineEls).forEach(function (key) { lineEls[key].setAttribute('class', ''); });
-    if (step.activeLines) {
-      step.activeLines.forEach(function (lineKey) {
-        if (lineEls[lineKey]) lineEls[lineKey].setAttribute('class', step.routeTo ? 'hit' : 'active');
-      });
-    }
-
-    if (step.scores) {
-      for (var i = 0; i < 3; i++) {
-        scoreEls[i].textContent = step.scoreLabels[i];
-        scoreEls[i].className = 'score-badge visible score-badge--' + step.scoreClasses[i];
+        routingCtx.fill();
       }
-    } else {
-      for (var j = 0; j < 3; j++) scoreEls[j].classList.remove('visible');
-    }
 
-    if (step.podStates) {
-      for (var k = 0; k < 3; k++) podEls[k].className = 'pod' + (step.podStates[k] ? ' ' + step.podStates[k] : '');
-    }
-
-    if (step.caches) {
-      for (var p = 0; p < 3; p++) renderCache(cacheEls[p], step.caches[p], step.cacheClasses ? step.cacheClasses[p] : null);
-    }
-
-    prevBtn.disabled = currentStep === 0;
-    nextBtn.disabled = currentStep === scenario.steps.length - 1;
-  }
-
-  function renderCache(el, blocks, classes) {
-    var html = '';
-    if (blocks.length === 0) {
-      for (var e = 0; e < 6; e++) html += '<div class="cache-block cache-block--empty">--</div>';
-    } else {
-      for (var i = 0; i < blocks.length; i++) {
-        var cls = (classes && classes[i]) ? classes[i] : 'filled';
-        html += '<div class="cache-block cache-block--' + cls + '">' + blocks[i] + '</div>';
+      // Score badge (show after request scanned)
+      if (phaseTime > 1 && phaseTime < 4) {
+        var scoreText = podCaches[idx] + ' blocks';
+        var badgeColor = podCaches[idx] > 0 ? '#d4edda' : '#f0ebe4';
+        var textColor = podCaches[idx] > 0 ? '#2e8b57' : '#8a8279';
+        routingCtx.beginPath();
+        var bw = 60, bh = 20;
+        routingCtx.roundRect(pos.x - bw / 2, pos.y - ph / 2 - 26, bw, bh, 10);
+        routingCtx.fillStyle = badgeColor;
+        routingCtx.fill();
+        routingCtx.fillStyle = textColor;
+        routingCtx.font = '700 10px "Red Hat Text"';
+        routingCtx.fillText(scoreText, pos.x, pos.y - ph / 2 - 15);
       }
-      var remaining = 8 - blocks.length;
-      for (var r = 0; r < remaining && r < 4; r++) html += '<div class="cache-block cache-block--empty">--</div>';
+    });
+
+    // Green glow pulse on Pod 1 during cache hit
+    if (phaseTime > 2.5 && phaseTime < 4.5) {
+      var glowAlpha = 0.08 + 0.06 * Math.sin(time / 300);
+      routingCtx.beginPath();
+      routingCtx.arc(podPositions[0].x, podPositions[0].y, 70, 0, Math.PI * 2);
+      routingCtx.fillStyle = 'rgba(46, 139, 87, ' + glowAlpha + ')';
+      routingCtx.fill();
     }
-    el.innerHTML = html;
+
+    routingAnimId = requestAnimationFrame(drawRouting);
   }
 
-  function goNext() {
-    if (!hasStarted) {
-      showDiagramStarted();
-      renderStep();
-      return;
-    }
-    var scenario = SCENARIOS[currentScenario];
-    if (currentStep < scenario.steps.length - 1) { currentStep++; renderStep(); }
-  }
-  function goPrev() {
-    if (currentStep > 0) { currentStep--; renderStep(); }
+  function easeOutCubic(t) { return 1 - Math.pow(1 - t, 3); }
+
+  function startRoutingAnimation() {
+    if (routingActive) return;
+    initRoutingCanvas();
+    routingActive = true;
+    routingStartTime = performance.now();
+    routingPhase = -1;
+    drawRouting(routingStartTime);
   }
 
-  startBtn.addEventListener('click', function () {
-    showDiagramStarted();
-    currentStep = 0;
-    renderStep();
-  });
+  function stopRoutingAnimation() {
+    routingActive = false;
+    if (routingAnimId) cancelAnimationFrame(routingAnimId);
+  }
 
-  nextBtn.addEventListener('click', goNext);
-  prevBtn.addEventListener('click', goPrev);
-  playPauseBtn.addEventListener('click', function () { isPlaying ? stopPlaying() : startPlaying(); });
+  // =========================================
+  // COMPARISON CANVASES (Slide 6)
+  // =========================================
+  var rrCanvas = document.getElementById('rrCanvas');
+  var caCanvas = document.getElementById('caCanvas');
+  var compAnimStarted = false;
 
-  // Keyboard navigation
-  document.addEventListener('keydown', function (e) {
-    if (e.key === 'ArrowRight' || e.key === 'Right') { e.preventDefault(); goNext(); }
-    if (e.key === 'ArrowLeft' || e.key === 'Left') { e.preventDefault(); goPrev(); }
-    if (e.key === ' ') {
-      e.preventDefault();
-      if (!hasStarted) {
-        showDiagramStarted();
-        currentStep = 0;
-        renderStep();
+  function initComparisonCanvases() {
+    if (compAnimStarted) return;
+    compAnimStarted = true;
+
+    [rrCanvas, caCanvas].forEach(function(canvas) {
+      if (!canvas) return;
+      var dpr = window.devicePixelRatio || 1;
+      var parent = canvas.parentElement;
+      canvas.width = parent.offsetWidth * dpr;
+      canvas.height = 120 * dpr;
+      canvas.style.width = parent.offsetWidth + 'px';
+      canvas.style.height = '120px';
+      canvas.getContext('2d').scale(dpr, dpr);
+    });
+
+    drawComparisonRR();
+    drawComparisonCA();
+  }
+
+  function drawComparisonRR() {
+    if (!rrCanvas) return;
+    var ctx = rrCanvas.getContext('2d');
+    var w = rrCanvas.width / (window.devicePixelRatio || 1);
+    var h = 120;
+    ctx.clearRect(0, 0, w, h);
+
+    var pods = [
+      { x: w * 0.2, label: 'Pod 1', blocks: 2 },
+      { x: w * 0.5, label: 'Pod 2', blocks: 2 },
+      { x: w * 0.8, label: 'Pod 3', blocks: 1 }
+    ];
+    var podW = 100, podH = 60;
+
+    pods.forEach(function(pod) {
+      ctx.beginPath();
+      ctx.roundRect(pod.x - podW / 2, h / 2 - podH / 2, podW, podH, 10);
+      ctx.fillStyle = '#ffffff';
+      ctx.fill();
+      ctx.strokeStyle = '#e05a3a';
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
+
+      ctx.fillStyle = '#2d2a26';
+      ctx.font = '600 12px "Red Hat Display"';
+      ctx.textAlign = 'center';
+      ctx.fillText(pod.label, pod.x, h / 2 - 10);
+
+      // Draw scattered cache blocks
+      var startX = pod.x - ((pod.blocks * 16 - 4) / 2);
+      for (var b = 0; b < pod.blocks; b++) {
+        ctx.beginPath();
+        ctx.roundRect(startX + b * 16, h / 2 + 4, 12, 12, 2);
+        ctx.fillStyle = 'rgba(224, 90, 58, 0.5)';
+        ctx.fill();
+      }
+    });
+  }
+
+  function drawComparisonCA() {
+    if (!caCanvas) return;
+    var ctx = caCanvas.getContext('2d');
+    var w = caCanvas.width / (window.devicePixelRatio || 1);
+    var h = 120;
+    ctx.clearRect(0, 0, w, h);
+
+    var pods = [
+      { x: w * 0.2, label: 'Pod 1', blocks: 5, active: true },
+      { x: w * 0.5, label: 'Pod 2', blocks: 0, active: false },
+      { x: w * 0.8, label: 'Pod 3', blocks: 0, active: false }
+    ];
+    var podW = 100, podH = 60;
+
+    pods.forEach(function(pod) {
+      ctx.beginPath();
+      ctx.roundRect(pod.x - podW / 2, h / 2 - podH / 2, podW, podH, 10);
+      ctx.fillStyle = '#ffffff';
+      if (pod.active) {
+        ctx.shadowColor = 'rgba(46, 139, 87, 0.2)';
+        ctx.shadowBlur = 12;
+      }
+      ctx.fill();
+      ctx.shadowBlur = 0;
+      ctx.strokeStyle = pod.active ? '#2e8b57' : '#e8e2da';
+      ctx.lineWidth = pod.active ? 2.5 : 1.5;
+      ctx.stroke();
+
+      ctx.fillStyle = '#2d2a26';
+      ctx.font = '600 12px "Red Hat Display"';
+      ctx.textAlign = 'center';
+      ctx.fillText(pod.label, pod.x, h / 2 - 10);
+
+      var startX = pod.x - ((Math.max(pod.blocks, 3) * 16 - 4) / 2);
+      if (pod.blocks > 0) {
+        for (var b = 0; b < pod.blocks; b++) {
+          ctx.beginPath();
+          ctx.roundRect(startX + b * 16, h / 2 + 4, 12, 12, 2);
+          ctx.fillStyle = '#2e8b57';
+          ctx.fill();
+        }
       } else {
-        isPlaying ? stopPlaying() : startPlaying();
+        for (var e = 0; e < 3; e++) {
+          ctx.beginPath();
+          ctx.roundRect(startX + e * 16, h / 2 + 4, 12, 12, 2);
+          ctx.fillStyle = '#f0ebe4';
+          ctx.fill();
+        }
       }
+    });
+  }
+
+  // =========================================
+  // SLIDE-SPECIFIC ANIMATION TRIGGERS
+  // =========================================
+  function triggerSlideAnimation(slideIndex) {
+    // Slide 0: Hero canvas
+    if (slideIndex === 0) {
+      initHeroCanvas();
+    } else {
+      if (heroAnimId) cancelAnimationFrame(heroAnimId);
+    }
+
+    // Slide 2: Routing canvas
+    if (slideIndex === 2) {
+      startRoutingAnimation();
+    } else {
+      stopRoutingAnimation();
+    }
+
+    // Slide 5: Comparison canvases
+    if (slideIndex === 5) {
+      setTimeout(initComparisonCanvases, 500);
+    }
+  }
+
+  // =========================================
+  // HERO COUNT-UP ANIMATION
+  // =========================================
+  function animateCountUp(el, target, suffix, duration) {
+    var isFloat = target % 1 !== 0;
+    var start = performance.now();
+    function tick(now) {
+      var elapsed = now - start;
+      var progress = Math.min(elapsed / duration, 1);
+      var eased = 1 - Math.pow(1 - progress, 3);
+      var current = eased * target;
+      el.textContent = (isFloat ? current.toFixed(1) : Math.round(current)) + suffix;
+      if (progress < 1) requestAnimationFrame(tick);
+    }
+    requestAnimationFrame(tick);
+  }
+
+  // =========================================
+  // ROUNDRECT POLYFILL
+  // =========================================
+  if (!CanvasRenderingContext2D.prototype.roundRect) {
+    CanvasRenderingContext2D.prototype.roundRect = function(x, y, w, h, r) {
+      if (typeof r === 'number') r = { tl: r, tr: r, br: r, bl: r };
+      this.moveTo(x + r.tl, y);
+      this.lineTo(x + w - r.tr, y);
+      this.quadraticCurveTo(x + w, y, x + w, y + r.tr);
+      this.lineTo(x + w, y + h - r.br);
+      this.quadraticCurveTo(x + w, y + h, x + w - r.br, y + h);
+      this.lineTo(x + r.bl, y + h);
+      this.quadraticCurveTo(x, y + h, x, y + h - r.bl);
+      this.lineTo(x, y + r.tl);
+      this.quadraticCurveTo(x, y, x + r.tl, y);
+      this.closePath();
+      return this;
+    };
+  }
+
+  // =========================================
+  // INIT
+  // =========================================
+  initHeroCanvas();
+
+  // Animate the hero metric on first slide
+  var metricTTFT = document.getElementById('metricTTFT');
+  if (metricTTFT) {
+    setTimeout(function() {
+      animateCountUp(metricTTFT, 47.5, 'x', 1500);
+    }, 800);
+  }
+
+  // Handle resize
+  window.addEventListener('resize', function() {
+    if (currentSlide === 0) initHeroCanvas();
+    if (currentSlide === 2) {
+      stopRoutingAnimation();
+      startRoutingAnimation();
+    }
+    if (currentSlide === 5) {
+      compAnimStarted = false;
+      initComparisonCanvases();
     }
   });
 
-  function startPlaying() {
-    if (!hasStarted) {
-      showDiagramStarted();
-      currentStep = 0;
-      renderStep();
-    }
-    isPlaying = true;
-    playPauseBtn.textContent = 'Pause';
-    playPauseBtn.classList.add('active');
-    playTick();
-  }
-  function stopPlaying() {
-    isPlaying = false;
-    playPauseBtn.textContent = 'Play';
-    playPauseBtn.classList.remove('active');
-    if (playTimer) { clearTimeout(playTimer); playTimer = null; }
-  }
-  function playTick() {
-    if (!isPlaying) return;
-    var scenario = SCENARIOS[currentScenario];
-    if (currentStep < scenario.steps.length - 1) {
-      currentStep++; renderStep();
-      playTimer = setTimeout(playTick, 2500);
-    } else { stopPlaying(); }
-  }
-
-  document.querySelectorAll('.scenario-tab').forEach(function (tab) {
-    tab.addEventListener('click', function () {
-      document.querySelectorAll('.scenario-tab').forEach(function (t) { t.classList.remove('active'); });
-      this.classList.add('active');
-      currentScenario = this.dataset.scenario;
-      currentStep = 0;
-      stopPlaying();
-      if (hasStarted) {
-        renderStep();
-      } else {
-        // Reset narration for new scenario
-        narrationEl.textContent = 'Select a scenario above and press the button to begin. Each scenario shows a different routing pattern.';
-      }
-    });
-  });
-
-  function initComparison() {
-    var rrCaches = [document.getElementById('rrCache1'), document.getElementById('rrCache2'), document.getElementById('rrCache3')];
-    var rrDist = [2, 2, 1];
-    rrCaches.forEach(function (el, i) {
-      var html = '';
-      for (var b = 0; b < rrDist[i]; b++) html += '<div class="mini-block mini-block--miss"></div>';
-      for (var e = 0; e < 3 - rrDist[i]; e++) html += '<div class="mini-block mini-block--empty"></div>';
-      el.innerHTML = html;
-    });
-    var caCaches = [document.getElementById('caCache1'), document.getElementById('caCache2'), document.getElementById('caCache3')];
-    var caDist = [5, 0, 0];
-    caCaches.forEach(function (el, i) {
-      var html = '';
-      for (var b = 0; b < caDist[i]; b++) html += '<div class="mini-block mini-block--filled"></div>';
-      if (caDist[i] === 0) { for (var e = 0; e < 3; e++) html += '<div class="mini-block mini-block--empty"></div>'; }
-      el.innerHTML = html;
-    });
-  }
-
-  // -- Render initial empty cache state for pods --
-  function initCaches() {
-    for (var p = 0; p < 3; p++) {
-      renderCache(cacheEls[p], [], null);
-    }
-  }
-
-  // -- Init --
-  initCaches();
-  initComparison();
-  initScrollProgress();
-  initCountUp();
 })();
 </script>
 </body>
